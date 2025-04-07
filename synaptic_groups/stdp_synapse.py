@@ -4,12 +4,12 @@ import torch
 
 class STDPSynapse(SynapticGroup):
 
-    def __init__(self, pre, post, idx_pre, idx_post, delay, weight,
+    def __init__(self, pre, pos, idx_pre, idx_pos, delay, weight,
                  A_plus=0.01, A_minus=0.012,
                  tau_plus=20.0, tau_minus=20.0,
                  dt=1.0,
                  w_min=0.0, w_max=1.0):
-        super().__init__(pre, post, idx_pre, idx_post, delay)
+        super().__init__(pre, pos, idx_pre, idx_pos, delay)
         self.weight = weight.to(device=self.device)
 
         # Parámetros de aprendizaje
@@ -23,11 +23,11 @@ class STDPSynapse(SynapticGroup):
 
         # Trazas por neurona (no por sinapsis)
         self.x_pre = torch.zeros(pre.size, dtype=torch.float32, device=self.device)
-        self.x_post = torch.zeros(post.size, dtype=torch.float32, device=self.device)
+        self.x_pos = torch.zeros(pos.size, dtype=torch.float32, device=self.device)
 
         # Decaimiento precomputado
         self.alpha_pre = torch.exp(-dt / tau_plus)
-        self.alpha_post = torch.exp(-dt / tau_minus)
+        self.alpha_pos = torch.exp(-dt / tau_minus)
 
 
     def propagate(self):
@@ -35,11 +35,11 @@ class STDPSynapse(SynapticGroup):
         if valid is None:
             return
 
-        tgt = self.idx_post[valid]
+        tgt = self.idx_pos[valid]
         wgt = self.weight[valid]
-        current = torch.zeros(self.post.size, dtype=torch.float32, device=self.device)
+        current = torch.zeros(self.pos.size, dtype=torch.float32, device=self.device)
         current.index_add_(0, tgt, wgt)
-        self.post.inject_currents(current)
+        self.pos.inject_currents(current)
 
 
     def update(self):
@@ -48,28 +48,28 @@ class STDPSynapse(SynapticGroup):
 
         # 1. Decaer trazas de forma global
         self.x_pre *= self.alpha_pre
-        self.x_post *= self.alpha_post
+        self.x_pos *= self.alpha_pos
 
         # 2. Recuperar spikes actuales
         pre_spikes = self.pre.spike_buffer[(t - self.delay) % self.pre.delay]
-        post_spikes = self.post.spike_buffer[(t - 1) % self.post.delay]
+        pos_spikes = self.pos.spike_buffer[(t - 1) % self.pos.delay]
 
         # 3. Actualizar trazas
         self.x_pre[pre_spikes] += 1.0
-        self.x_post[post_spikes] += 1.0
+        self.x_pos[pos_spikes] += 1.0
 
         # 4. LTP: si spike PRE, usar traza post acumulada
         valid_pre = pre_spikes[self.idx_pre]
         if valid_pre.any():
             indices = valid_pre.nonzero(as_tuple=True)[0]
-            posts = self.idx_post[indices]
-            dw = self.A_plus * self.x_post[posts]
+            pos = self.idx_pos[indices]
+            dw = self.A_plus * self.x_pos[pos]
             self.weight[indices] += dw
 
         # 5. LTD: si spike POST, usar traza pre acumulada
-        valid_post = post_spikes[self.idx_post]
-        if valid_post.any():
-            indices = valid_post.nonzero(as_tuple=True)[0]
+        valid_pos = pos_spikes[self.idx_pos]
+        if valid_pos.any():
+            indices = valid_pos.nonzero(as_tuple=True)[0]
             pres = self.idx_pre[indices]
             dw = -self.A_minus * self.x_pre[pres]
             self.weight[indices] += dw

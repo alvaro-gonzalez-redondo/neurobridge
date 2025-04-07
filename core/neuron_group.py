@@ -28,4 +28,3 @@ class NeuronGroup(ABC):
     def reset(self):
         self.spike_buffer.zero_()
         self.t = 0
-

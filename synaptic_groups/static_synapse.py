@@ -4,8 +4,8 @@ import torch
 
 class StaticSynapse(SynapticGroup):
 
-    def __init__(self, pre, post, idx_pre, idx_post, delay, weight):
-        super().__init__(pre, post, idx_pre, idx_post, delay)
+    def __init__(self, pre, pos, idx_pre, idx_pos, delay, weight):
+        super().__init__(pre, pos, idx_pre, idx_pos, delay)
         self.weight = weight.to(device=pre.device)
 
 
@@ -14,11 +14,11 @@ class StaticSynapse(SynapticGroup):
         if valid is None:
             return
 
-        tgt = self.idx_post[valid]
+        tgt = self.idx_pos[valid]
         wgt = self.weight[valid]
-        current = torch.zeros(self.post.size, dtype=torch.float32, device=self.device)
+        current = torch.zeros(self.pos.size, dtype=torch.float32, device=self.device)
         current.index_add_(0, tgt, wgt)
-        self.post.inject_currents(current)
+        self.pos.inject_currents(current)
 
 
     def update(self): pass

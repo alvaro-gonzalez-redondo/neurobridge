@@ -25,6 +25,7 @@ class SimulatorEngine:
         if n_gpus<0 or n_gpus>=torch.cuda.device_count():
             n_gpus = torch.cuda.device_count()
         self.n_gpus = n_gpus
+        self.world_size = max(1, self.n_gpus)
         self.n_bridge_steps = n_bridge_steps
         self.circuits = [] #1 or as many as GPUs
         self.t = 0 #Current simulation step
@@ -34,8 +35,8 @@ class SimulatorEngine:
         self._run_circuit(self.circuits[0])
 
 
-    def _run_multi_gpu_worker(self, rank, world_size):
-        setup_distributed(rank, world_size)
+    def _run_multi_gpu_worker(self, rank):
+        setup_distributed(rank, self.world_size)
         self._run_circuit(self.circuits[rank], rank=rank)
         cleanup_distributed()
     
@@ -72,7 +73,7 @@ class SimulatorEngine:
         raise NotImplementedError("Debes sobreescribir build_user_circuit(...) para definir tu red.")
 
 
-    def _run_circuit(self, circuit, rank=0):
+    def _run_circuit(self, circuit):
         # Estimulación personalizada (si existe)
         if hasattr(circuit, "stimulate"):
             circuit.stimulate(self.t)
@@ -88,10 +89,10 @@ class SimulatorEngine:
                     circuit.inject_from_bridge(group, bridge_indices)
 
         # Avanzar simulación
-        circuit.step(self.t)
+        circuit.step()
 
         # Mostrar actividad
-        print(f"[t={self.t}] [GPU {rank}]")
+        print(f"[t={self.t}] [GPU {circuit.rank}]")
         for i, group in enumerate(circuit.neuron_groups):
             spikes = group.spike_buffer[(group.t-1) % group.delay_max].to(torch.uint8).tolist()
             print(f"  NeuronGroup[{i}] spikes: {spikes}")

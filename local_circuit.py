@@ -18,7 +18,7 @@ class LocalCircuit:
         self.n_bridge_steps = n_bridge_steps
 
         self.neuron_groups = []
-        self.synapses = []
+        self.synaptic_groups = []
 
         self.bridge = None
         if bridge_size is not None:
@@ -29,8 +29,8 @@ class LocalCircuit:
         self.neuron_groups.append(group)
 
 
-    def add_synapse(self, synapse):
-        self.synapses.append(synapse)
+    def add_synaptic_group(self, group):
+        self.synaptic_groups.append(group)
 
 
     def inject_from_bridge(self, target_group, bridge_indices):
@@ -56,13 +56,13 @@ class LocalCircuit:
         self.bridge.write_spikes(spikes_to_write)
 
 
-    def step(self, t):
+    def step(self):
         # Actualizar dinámicas neuronales
         for group in self.neuron_groups:
             group.step()
 
         # Propagar spikes a través de sinapsis
-        for syn in self.synapses:
+        for syn in self.synaptic_groups:
             syn.step()
 
         # Avanzar bridge si está presente

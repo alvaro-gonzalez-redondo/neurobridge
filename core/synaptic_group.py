@@ -4,23 +4,23 @@ import torch
 
 class SynapticGroup(ABC):
 
-    def __init__(self, pre, post, idx_pre, idx_post, delay):
+    def __init__(self, pre, pos, idx_pre, idx_pos, delay):
         """
-        pre, post: objetos NeuronGroup
-        idx_pre, idx_post: índices de conexiones (shape: [num_synapses])
+        pre, pos: objetos NeuronGroup
+        idx_pre, idx_pos: índices de conexiones (shape: [num_synapses])
         delay: tensor de delays por sinapsis (shape: [num_synapses])
         """
         self.pre = pre
-        self.post = post
+        self.pos = pos
         self.idx_pre = idx_pre
-        self.idx_post = idx_post
+        self.idx_pos = idx_pos
         self.delay = delay
         self.device = pre.device
         self._all_indices = torch.arange(self.idx_pre.shape[0], device=self.device)
         self._valid_indices = None
     
 
-    def step(self):
+    def step(self, t):
         self.cache_active_indices()
         self.propagate()
         self.update()
@@ -39,8 +39,8 @@ class SynapticGroup(ABC):
 
 
     def cache_active_indices(self, filtered=True):
-            """Calcula y guarda los índices de sinapsis activas en este paso."""
-            self._valid_indices = self.get_active_indices(filtered)
+        """Calcula y guarda los índices de sinapsis activas en este paso."""
+        self._valid_indices = self.get_active_indices(filtered)
         
 
     @abstractmethod
