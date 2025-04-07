@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 import torch
 
+
 class SynapticGroup(ABC):
+
     def __init__(self, pre, post, idx_pre, idx_post, delay):
         """
         pre, post: objetos NeuronGroup

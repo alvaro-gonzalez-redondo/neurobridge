@@ -42,6 +42,7 @@ class MyEngine(SimulatorEngine):
 
         return circuit
 
+
 if __name__ == "__main__":
     engine = MyEngine(n_gpus=-1, n_bridge_steps=3)  # Cambia a n=0 (CPU) o n>=2 (multi-GPU) si quieres (-1 significa "todas las que haya")
     engine.build()

@@ -1,7 +1,9 @@
 from neurobridge.core.neuron_group import NeuronGroup
 import torch
 
+
 class IFNeuronGroup(NeuronGroup):
+
     def __init__(self, size, delay, device, threshold=1.0):
         super().__init__(size, delay, device)
         self.v = torch.zeros(size, dtype=torch.float32, device=self.device)
@@ -9,8 +11,10 @@ class IFNeuronGroup(NeuronGroup):
         self._input_currents = torch.zeros(size, dtype=torch.float32, device=self.device)
         self._input_spikes = torch.zeros(size, dtype=torch.bool, device=self.device)
 
+
     def inject_currents(self, I): self._input_currents += I
     def inject_spikes(self, spikes): self._input_spikes |= spikes.bool()
+
 
     def step(self):
         self.v += self._input_currents

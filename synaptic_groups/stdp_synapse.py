@@ -1,7 +1,9 @@
 from neurobridge.core.synaptic_group import SynapticGroup
 import torch
 
+
 class STDPSynapse(SynapticGroup):
+
     def __init__(self, pre, post, idx_pre, idx_post, delay, weight,
                  A_plus=0.01, A_minus=0.012,
                  tau_plus=20.0, tau_minus=20.0,
@@ -27,6 +29,7 @@ class STDPSynapse(SynapticGroup):
         self.alpha_pre = torch.exp(-dt / tau_plus)
         self.alpha_post = torch.exp(-dt / tau_minus)
 
+
     def propagate(self):
         valid = self._valid_indices
         if valid is None:
@@ -37,6 +40,7 @@ class STDPSynapse(SynapticGroup):
         current = torch.zeros(self.post.size, dtype=torch.float32, device=self.device)
         current.index_add_(0, tgt, wgt)
         self.post.inject_currents(current)
+
 
     def update(self):
         # Tiempo actual
