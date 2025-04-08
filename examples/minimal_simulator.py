@@ -1,19 +1,19 @@
 import torch
 from neurobridge.engine import SimulatorEngine
 from neurobridge.local_circuit import LocalCircuit
-from neurobridge.neuron_groups.if_neuron_group import IFNeuronGroup
+from neurobridge.neuron_groups.if_neuron_group import IandF
 from neurobridge.synaptic_groups.static_synapse import StaticSynapse
 
 
 class MyEngine(SimulatorEngine):
 
-    def build_user_circuit(self, rank, world_size, device):
+    def build_user_network(self, rank, world_size, device):
         # Crear circuito
         circuit = LocalCircuit(device=device, rank=rank, world_size=world_size, n_bridge_steps=self.n_bridge_steps, bridge_size=12)
 
         # Crear poblaciones
-        popA = IFNeuronGroup(size=12, delay=5, device=device)
-        popB = IFNeuronGroup(size=12, delay=5, device=device)
+        popA = IandF(size=12, delay=5, device=device)
+        popB = IandF(size=12, delay=5, device=device)
 
         # Crear sinapsis A → B
         idx_pre = torch.arange(6, device=device)
@@ -24,8 +24,8 @@ class MyEngine(SimulatorEngine):
         syn = StaticSynapse(pre=popA, pos=popB, idx_pre=idx_pre, idx_pos=idx_pos, delay=delay, weight=weight)
 
         # Añadir al circuito
-        circuit.add_neuron_group(popA)
-        circuit.add_neuron_group(popB)
+        circuit._add_neuron_group(popA)
+        circuit._add_neuron_group(popB)
         circuit.add_synaptic_group(syn)
 
         # Comunicación puente: grupo A exporta, grupo B recibe
