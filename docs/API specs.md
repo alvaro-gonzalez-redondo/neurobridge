@@ -22,7 +22,7 @@ The primary mechanism for creating connections is the `>>` operator:
 - `weight`: Synaptic weight (scalar, tensor, or function)
 - `delay`: Synaptic delay (scalar, tensor, or function)
 - `synapse`: Synapse class (e.g., `StaticSynapse`, `STDPSynapse`, or custom class)
-- `sparse`: Format selection (`True`, `False`, or `'auto'`)
+- `sparse`: Format selection (`True`, `False`)
 
 ### 1.2 Pattern-Specific Parameters
 
@@ -30,13 +30,13 @@ The primary mechanism for creating connections is the `>>` operator:
 
 ```python
 # Connection by probability
-(pop1 >> pop2)(pattern='random', p=0.1)
+conn = (pop1 >> pop2)(pattern='random', p=0.1)
 
-# Connection by fixed fan-in (each target receives exactly 10 inputs)
-pop1 >> pop2(pattern='random', fanin=10)
+# Connection by fixed fan-in (each target receives exactly 10 inputs randomly)
+conn = (pop1 >> pop2)(pattern='random', fanin=10)
 
-# Connection by fixed fan-out (each source connects to exactly 20 targets)
-pop1 >> pop2(pattern='random', fanout=20)
+# Connection by fixed fan-out (each source connects to exactly 20 targets randomly)
+conn = (pop1 >> pop2)(pattern='random', fanout=20)
 ```
 - `p`: Connection probability (0.0-1.0)
 - `fanin`: Fixed number of inputs per target neuron
@@ -47,7 +47,7 @@ pop1 >> pop2(pattern='random', fanout=20)
 #### 1.2.2 Distance-Based Connectivity
 
 ```python
-(layer1 >> layer2)(
+conn = (layer1 >> layer2)(
     pattern='distance', 
     max_distance=5.0,
     p_max=1.0,
@@ -55,9 +55,10 @@ pop1 >> pop2(pattern='random', fanout=20)
 )
 
 # Distance-based with fixed fan-in
-(layer1 >> layer2)(
+conn = (layer1 >> layer2)(
     pattern='distance',
-    fanin=10  # Each target connects to 10 closest sources
+    fanin=10,  # Each target connects to 10 close sources randomly
+    sigma=2.0  # Normal distribution of probability
 )
 ```
 - `max_distance`: Maximum connection distance
@@ -65,40 +66,40 @@ pop1 >> pop2(pattern='random', fanout=20)
 - `sigma`: Width parameter for probability decay
 - `fanin`: Fixed number of inputs per target neuron (selects closest sources)
 - `fanout`: Fixed number of outputs per source neuron (selects closest targets)
-- `distance_func`: Custom distance function (optional)
+- `prob_func`: Custom probability function (optional)
 
 #### 1.2.3 Specific Connectivity
 
 ```python
-(pop1 >> pop2)(pattern='specific', sources=[0, 1, 2], targets=[5, 6, 7])
+conn = (pop1 >> pop2)(pattern='specific', sources=[0, 1, 2], targets=[5, 6, 7])
 ```
 - `sources`: List of source neuron indices
 - `targets`: List of target neuron indices
 
 ### 1.3 Function-Based Parameters
 
-Parameters can be functions of relevant properties:
+Parameters can be functions of relevant properties. Depending on the number of parameters accepted by the lambda function, distance (1 param) or absolute coordinates (2 params) can be used to calculate the values.
 
 ```python
 # Weight as function of distance in 2D
-(layer1 >> layer2)(
+conn = (layer1 >> layer2)(
     pattern='distance',
     max_distance=10.0,
-    weight=lambda x, y: 0.5 * torch.exp(-(x**2 + y**2)/10)
+    weight=lambda src, tgt: torch.sqrt(((src[:2] - tgt[:2])**2).sum()) #Two params, so absolute coordinates with src and tgt are given
 )
 
-# Weight using custom distance function with full coordinate access
-(ayer1 >> layer2)(
+# Weight using custom distance function with absolute coordinate access
+conn = (ayer1 >> layer2)(
     pattern='distance',
-    distance_func=lambda src, tgt: torch.sqrt(((src[:2] - tgt[:2])**2).sum()),
-    weight=lambda d: 0.5 * torch.exp(-d/10)
+    prob_func=lambda src, tgt: torch.sqrt(((src[:2] - tgt[:2])**2).sum()), #Two params, abs coord
+    weight=lambda d: 0.5 * torch.exp(-d/10) #One param, so distances are given
 )
 
 # Delay proportional to distance
 (layer1 >> layer2)(
     pattern='distance',
     max_distance=10.0,
-    delay=lambda d: 1 + d.floor()
+    delay=lambda d: 1 + d.floor() #One param, so distance
 )
 ```
 
@@ -106,10 +107,10 @@ Parameters can be functions of relevant properties:
 
 ```python
 # Default static synapse
-(pop1 >> pop2)(weight=1.0)
+conn = (pop1 >> pop2)(weight=1.0)
 
 # STDP synapse with custom parameters
-(pop1 >> pop2)(
+conn = (pop1 >> pop2)(
     synapse=STDPSynapse,
     weight=0.5,
     stdp_params={
@@ -120,7 +121,7 @@ Parameters can be functions of relevant properties:
 )
 
 # Custom synapse class
-(pop1 >> pop2)(
+conn = (pop1 >> pop2)(
     synapse=MyCustomSynapse,
     weight=0.5,
     my_param=42
@@ -133,25 +134,25 @@ Parameters can be functions of relevant properties:
 
 ```python
 # Filter by neuron index
-(pop1.where_id(lambda i: i < 100) >> pop2)(pattern='all_to_all')
+conn = (pop1.where_id(lambda i: i < 100) >> pop2)(pattern='all_to_all')
 ```
 
 ### 2.2 Position-Based Filtering (for topological populations)
 
 ```python
 # Filter by neuron position
-(layer1.where_pos(lambda x, y: x**2 + y**2 < 25) >> layer2)(pattern='distance', max_distance=5)
+conn = (layer1.where_pos(lambda x, y: x**2 + y**2 < 25) >> layer2)(pattern='distance', max_distance=5)
 
 # Using predefined regions
-(layer1.where_region('center', radius=3) >> layer2)(pattern='all_to_all')
-(layer1.where_region('quadrant', which=1) >> layer2)(pattern='all_to_all')
+conn = (layer1.where_region('center', radius=3) >> layer2)(pattern='all_to_all')
+conn = (layer1.where_region('quadrant', which=1) >> layer2)(pattern='all_to_all')
 ```
 
 ### 2.3 Combined Filtering
 
 ```python
 # Combine multiple filters
-(pop1.where_id(lambda i: i % 2 == 0).where_pos(lambda x, y: x > 0) >> pop2)(pattern='random', p=0.1)
+conn = (pop1.where_id(lambda i: i % 2 == 0).where_pos(lambda x, y: x > 0) >> pop2)(pattern='random', p=0.1)
 ```
 
 ## 3. Connection Objects
@@ -168,7 +169,7 @@ conn = (pop1 >> pop2)(pattern='random', p=0.1)
 # Access connection information
 print(f"Created {len(conn.indices)} connections")
 print(f"Average weight: {conn.weights.mean()}")
-print(f"Connection density: {conn.density}")
+# Maybe more info?
 ```
 
 ### 3.2 Connection Manipulation
@@ -182,7 +183,7 @@ conn.prune_weakest(fraction=0.2)
 conn.prune_by_weight(threshold=0.1)
 
 # Apply mask to existing connections
-conn.filter(lambda w, d: w > 0.1 and d < 3)
+conn.filter(lambda w, d: w > 0.1 and d < 3) #This requires more work to be correctly defined
 ```
 
 ## 4. Network and Group Operations
@@ -201,21 +202,21 @@ network.add(pop3, name="output")
 
 ```python
 # Connect entire network to external population
-(network >> external_pop)(pattern='random', p=0.05)
+conn = (network >> external_pop)(pattern='random', p=0.05)
 
 # Connect specific populations within network
-(network["input"] >> network["hidden"])(pattern='all_to_all')
-(network["input", "hidden"] >> network["output"])(pattern='random', p=0.1)
+conn = (network["input"] >> network["hidden"])(pattern='all_to_all')
+conn = (network["input", "hidden"] >> network["output"])(pattern='random', p=0.1)
 ```
 
 ### 4.3 Network Filtering
 
 ```python
 # Apply filters to network populations
-(network["input"].where_id(lambda i: i < 50) >> network["output"])(pattern='all_to_all')
+conn = (network["input"].where_id(lambda i: i < 50) >> network["output"])(pattern='all_to_all')
 
 # For topological networks
-(network.where_region('center', radius=5) >> external_pop)(pattern='distance', max_distance=3)
+conn = (network.where_region('center', radius=5) >> external_pop)(pattern='distance', max_distance=3)
 ```
 
 ## 5. Topological Populations

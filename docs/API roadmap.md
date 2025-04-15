@@ -8,14 +8,14 @@ This document outlines the implementation roadmap for the enhanced NeuroBridge c
 
 ### Step 1.1: Base Connection Classes (HIGH PRIORITY)
 
-1. Create a `ConnectionSpec` class that handles connection creation parameters
+1. Create a `ConnectionOperator` class that handles connection creation parameters
 2. Implement the `__rshift__` operator (`>>`) for neuron populations
 3. Create a `Connection` class to represent the result of a connection operation
 4. Implement basic connection parameter validation
 
 ```python
 # Example target implementation:
-pop1 >> pop2(pattern='all_to_all', weight=1.0, delay=1)
+conn = (pop1 >> pop2)(pattern='all_to_all', weight=1.0, delay=1)
 ```
 
 ### Step 1.2: Basic Connection Patterns (HIGH PRIORITY)
@@ -23,21 +23,21 @@ pop1 >> pop2(pattern='all_to_all', weight=1.0, delay=1)
 1. Implement the following connection patterns:
    - `all_to_all`: Connect every source to every target
    - `one_to_one`: Connect matching indices
-   - `random`: Connect with probability p or fixed fanin/fanout
+   - `random`: Connect with probability $p$ or fixed fanin/fanout
 2. Add support for custom connection patterns through explicit indices
 
 ```python
 # Random connectivity by probability
-pop1 >> pop2(pattern='random', p=0.1)
+conn = (pop1 >> pop2)(pattern='random', p=0.1)
 
 # Random connectivity by fanin/fanout
-pop1 >> pop2(pattern='random', fanin=10)
-pop1 >> pop2(pattern='random', fanout=20)
+conn = (pop1 >> pop2)(pattern='random', fanin=10)
+conn = (pop1 >> pop2)(pattern='random', fanout=20)
 
 # Custom indices
 idx_pre = torch.tensor([0, 1, 2])
 idx_pos = torch.tensor([5, 6, 7])
-pop1 >> pop2(pattern=(idx_pre, idx_pos), weight=1.0)
+conn = (pop1 >> pop2)(pattern=(idx_pre, idx_pos), weight=1.0)
 ```
 
 ### Step 1.3: Connection Object Methods (HIGH PRIORITY)
@@ -46,7 +46,6 @@ pop1 >> pop2(pattern=(idx_pre, idx_pos), weight=1.0)
    - `get_indices()`
    - `get_weights()`
    - `get_delays()`
-   - `get_density()`
 2. Implement basic connection manipulation methods:
    - `scale_weights(factor)`
    - `set_weights(new_weights)`
@@ -57,22 +56,22 @@ pop1 >> pop2(pattern=(idx_pre, idx_pos), weight=1.0)
 
 ### Step 2.1: Function-Based Parameters (HIGH PRIORITY)
 
-1. Extend `ConnectionSpec` to handle callable parameters
+1. Extend `ConnectionOperator` to handle callable parameters
 2. Implement parameter evaluation based on relevant properties
 3. Add support for different parameter function signatures
 
 ```python
 # Weight as function of index
-pop1 >> pop2(weight=lambda i, j: 1.0 if i < j else 0.5)
+conn = (pop1 >> pop2)(weight=lambda i, j: 1.0 if i < j else 0.5)
 
 # Weight as function of multi-dimensional coordinates
-layer1 >> layer2(
+conn = (layer1 >> layer2)(
     pattern='distance',
-    weight=lambda x, y: 0.5 * torch.exp(-(x**2 + y**2)/10)
+    weight=lambda dx, dy: 0.5 * torch.exp(-(dx**2 + dy**2)/10)
 )
 
 # Custom distance function
-layer1 >> layer2(
+conn = (layer1 >> layer2)(
     pattern='distance',
     distance_func=lambda src, tgt: torch.sqrt(((src - tgt)**2).sum()),
     weight=lambda d: 0.5 * torch.exp(-d/10)
@@ -81,26 +80,18 @@ layer1 >> layer2(
 
 ### Step 2.2: Synapse Type Selection (MEDIUM PRIORITY)
 
-1. Extend `ConnectionSpec` to handle synapse class selection
+1. Extend `ConnectionOperator` to handle synapse class selection
 2. Create a mechanism to instantiate the specified synapse class
 3. Implement parameter forwarding to specific synapse types
 
 ```python
 # Using synapse class
-pop1 >> pop2(
+conn = (pop1 >> pop2)(
     synapse=STDPSynapse,
     weight=0.5,
     stdp_params={'A_plus': 0.01}
 )
 ```
-
-### Step 2.3: Enhanced Connection Manipulation (MEDIUM PRIORITY)
-
-1. Add more sophisticated connection manipulation methods:
-   - `prune_weakest(fraction)`
-   - `prune_by_weight(threshold)`
-   - `filter(condition_func)`
-2. Implement connection statistics and analysis functions
 
 ## Phase 3: Topological Populations and Distance-Based Connectivity
 
@@ -108,7 +99,7 @@ pop1 >> pop2(
 
 ### Step 3.1: Topological Population Base (HIGH PRIORITY)
 
-1. Create a `TopologyMixin` class to be inherited by neuron populations
+1. Create a `SpatialGroup` class to be inherited by neuron populations
 2. Implement different topology types (1D, 2D, 3D, custom)
 3. Add position generation and access methods
 4. Implement periodic boundary option as a property of the topology
@@ -120,36 +111,6 @@ layer = population(400, neuron_type=IFNeuron, topology='2d',
 
 # Access positions
 positions = layer.positions  # Returns tensor of shape [n_neurons, 2]
-```
-
-### Step 3.2: Distance-Based Connectivity (HIGH PRIORITY)
-
-1. Implement distance-based connection pattern
-2. Add support for different distance metrics
-3. Create efficient distance computation methods
-4. Implement fanin/fanout options for distance-based connections
-
-```python
-# Connect neurons based on distance with probability
-layer1 >> layer2(pattern='distance', max_distance=5.0, p_max=1.0)
-
-# Connect each target to its 10 closest sources
-layer1 >> layer2(pattern='distance', fanin=10)
-```
-
-### Step 3.3: Custom Distance Functions (MEDIUM PRIORITY)
-
-1. Add support for user-defined distance functions
-2. Implement efficient application of custom distance functions
-3. Create common distance function presets
-
-```python
-# Custom distance function
-layer1 >> layer2(
-    pattern='distance',
-    distance_func=lambda src, tgt: torch.sqrt(((src[:2] - tgt[:2])**2).sum()),
-    weight=lambda d: 0.5 * torch.exp(-d/10)
-)
 ```
 
 ## Phase 4: Population Filtering and Masking
@@ -164,7 +125,7 @@ layer1 >> layer2(
 
 ```python
 # Connect only specific neurons based on index
-pop1.where_id(lambda i: i < 100) >> pop2(pattern='all_to_all')
+conn = (pop1.where_id(lambda i: i < 100) >> pop2)(pattern='all_to_all'))
 ```
 
 ### Step 4.2: Position-Based Filtering (MEDIUM PRIORITY)
@@ -175,10 +136,10 @@ pop1.where_id(lambda i: i < 100) >> pop2(pattern='all_to_all')
 
 ```python
 # Filter by position
-layer1.where_pos(lambda x, y: x**2 + y**2 < 25) >> layer2(pattern='distance')
+conn = (layer1.where_pos(lambda x, y: x**2 + y**2 < 25) >> layer2)(pattern='distance')
 
 # Use predefined regions
-layer1.where_region('center', radius=3) >> layer2(pattern='all_to_all')
+conn = (layer1.where_region('center', radius=3) >> layer2)(pattern='all_to_all')
 ```
 
 ### Step 4.3: Combined Filtering (LOW PRIORITY)
@@ -189,7 +150,7 @@ layer1.where_region('center', radius=3) >> layer2(pattern='all_to_all')
 
 ```python
 # Combine filters
-pop1.where_id(lambda i: i % 2 == 0).where_pos(lambda x, y: x > 0) >> pop2()
+conn = (pop1.where_id(lambda i: i % 2 == 0).where_pos(lambda x, y: x > 0) >> pop2)(...)
 ```
 
 ## Phase 5: Network and Group Operations
@@ -209,7 +170,7 @@ network.add(pop1, name="input")
 network.add(pop2, name="hidden")
 
 # Connect entire network
-network >> external_pop(pattern='random', p=0.05)
+conn = (network >> external_pop)(pattern='random', p=0.05)
 ```
 
 ### Step 5.2: Network Component Selection (MEDIUM PRIORITY)
@@ -220,7 +181,7 @@ network >> external_pop(pattern='random', p=0.05)
 
 ```python
 # Connect specific populations
-network["input"] >> network["hidden"](pattern='all_to_all')
+conn = (network["input"] >> network["hidden"])(pattern='all_to_all')
 ```
 
 ### Step 5.3: Network Filtering (LOW PRIORITY)
@@ -231,14 +192,14 @@ network["input"] >> network["hidden"](pattern='all_to_all')
 
 ```python
 # Filter at network level
-network.where_region('center', radius=5) >> external_pop()
+conn = (network.where_region('center', radius=5) >> external_pop)()
 ```
 
 ## Phase 6: Advanced Features and Utilities
 
 **Target: Add productivity features and tools for complex networks.**
 
-### Step 6.1: Connection Templates (MEDIUM PRIORITY)
+### Step 6.1: Connection Templates (LOW PRIORITY)
 
 1. Create a `ConnectionTemplate` class
 2. Implement template definition and application

@@ -136,15 +136,20 @@ class NeuronGroup(SpatialGroup):
 
 
     def inject_currents(self, I: torch.Tensor) -> None:
+        assert I.shape[0] == self.size
         self._input_currents += I
 
 
     def inject_spikes(self, spikes: torch.Tensor) -> None:
         """Forces the neurons to spike, independently of weights."""
+        assert spikes.shape[0] == self.size
         self._input_spikes |= spikes.bool()
     
 
     def get_spikes_at(self, delays: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+        assert delays.shape[0] == indices.shape[0]
+        assert delays.shape[0] == self.size
+
         t_indices = (self.t - delays) % self.delay_max
         return self.spike_buffer[indices, t_indices]
 
@@ -180,6 +185,51 @@ class ParrotGroup(NeuronGroup):
             self._input_currents.fill_(0.0)
 
 
+class IFNeuronGroup(NeuronGroup):
+    V: torch.Tensor
+    threshold: torch.Tensor
+    decay: torch.Tensor
+
+
+    def __init__(self, device: str, n_neurons: int, spatial_dimensions: int = 2, delay_max: int = 20, threshold: float = 1.0, decay: float = 0.95):
+        super().__init__(device, n_neurons, spatial_dimensions, delay_max)
+        self.V = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
+        self.threshold = torch.Tensor([threshold], dtype=torch.float, device=device)
+        self.decay = torch.Tensor([decay], dtype=torch.float, device=device)
+
+
+    def _process(self):
+        super()._process()
+        t_idx = self.t % self.delay_max
+
+        # Update potential with decay and input
+        self.V *= self.decay
+        self.V += self._input_currents
+        self._input_currents.fill_(0.0)
+
+        # Determine which neurons spike
+        spikes = self.V >= self.threshold
+        self.spike_buffer[:, t_idx] = spikes
+        self.V[spikes] = 0.0  # Reset membrane potential
+
+
+class RandomSpikeGenerator(NeuronGroup):
+    firing_rate: torch.Tensor  # En Hz
+
+    def __init__(self, device: str, n_neurons: int, firing_rate: float = 10.0, spatial_dimensions: int = 2, delay_max: int = 20):
+        super().__init__(device, n_neurons, spatial_dimensions=spatial_dimensions, delay_max=delay_max)
+        self.firing_rate = torch.Tensor([firing_rate], dtype=torch.float, device=device)
+
+
+    def _process(self):
+        super()._process()
+        t_idx = self.t % self.delay_max
+
+        p = self.firing_rate * 1e-3 #dt=0.001 seconds
+        spikes = torch.rand(self.size, device=self.device) < p
+        self.spike_buffer[:, t_idx] = spikes
+
+
 class ConnectionOperator:
     current_circuit: Optional[LocalCircuit] = None
 
@@ -187,6 +237,7 @@ class ConnectionOperator:
     pos: NeuronGroup
     pattern: Optional[str]
     kwargs: dict[str, Any]
+
 
     def __init__(self, pre: NeuronGroup, pos: NeuronGroup) -> None:
         if pre.device != pos.device:
@@ -423,6 +474,7 @@ class BridgeNeuronGroup(NeuronGroup):
 
     # Any positive input to a bridge neuron will automatically generate a spike
     def inject_currents(self, I: torch.Tensor):
+        assert I.shape[0] == self.size
         from_id = self.rank * self.n_local_neurons
         to_id = (self.rank+1) * self.n_local_neurons
         subset = I[from_id:to_id]
@@ -431,6 +483,7 @@ class BridgeNeuronGroup(NeuronGroup):
 
     # Any injected spike to a bridge neuron will automatically generate a spike
     def inject_spikes(self, spikes: torch.Tensor):
+        assert spikes.shape[0] == self.size
         from_id = self.rank * self.n_local_neurons
         to_id = (self.rank+1) * self.n_local_neurons
         subset = spikes[from_id:to_id].bool()
@@ -483,8 +536,21 @@ class BridgeNeuronGroup(NeuronGroup):
 class LocalCircuit(GPUNode):
     """
     Contains all updatable objects of this GPU.
+    Used for structural organization. It might contain future extensions for analyses and serialization/deserialization.
     """
-    pass
+    
+    def get_statistics(self):
+        """Recopila estadísticas de actividad de todos los componentes."""
+        stats = {}
+        for child in self.children:
+            if hasattr(child, 'get_activity_stats'):
+                stats[child.name] = child.get_activity_stats()
+        return stats
+
+
+    def save_state(self, path):
+        """Guarda el estado completo del circuito."""
+        raise NotImplementedError("Not implemented yet.")
 
 
 def is_distributed() -> bool:
@@ -551,6 +617,7 @@ class SimulatorEngine(Node):
     world_size: int
     rank: int
     local_circuit: LocalCircuit
+    bridge: Optional[BridgeNeuronGroup]
 
 
     def __init__(self, autoparenting_nodes=False):
@@ -570,7 +637,7 @@ class SimulatorEngine(Node):
 
         # Inicialización del circuito local
         if "RANK" in os.environ:
-            dist.init_process_group(backend="nccl", init_method="env://")
+            dist.init_process_group(backend="nccl") #, init_method="env://") #Asumimos siempre que se ejecutará con `torchrun`
             self.rank = dist.get_rank()
         else:
             self.rank = 0 #Modo no distribuido
@@ -584,6 +651,8 @@ class SimulatorEngine(Node):
         ConnectionOperator.current_circuit = self.local_circuit
         if autoparenting_nodes:
             Node.auto_parent = self.local_circuit
+
+        self.bridge = None
 
         # Logger
         SimulatorEngine.logger = setup_logger(self.rank)
@@ -605,6 +674,10 @@ class SimulatorEngine(Node):
     
 
     def initialize(self):
+        # Make sure the bridge is the last Node updated in each simulation step.
+        # This will be useful to allow an async `all_gather`.
+        #if self.bridge:
+            #self.local_circuit.add_child(self.bridge)
         self._call_ready()
     
 
@@ -657,7 +730,7 @@ class PingPongRingEngine(SimulatorEngine):
         # Crear un puente neuronal (permite la comunicación entre GPUs)
         bridge = self.add_default_bridge(n_local_neurons=n_neurons, n_steps=20)
 
-        # Crear una neurona local
+        # Crear un grupo neuronal local
         local_neurons = ParrotGroup(self.local_circuit.device, n_neurons)
 
         # Envía a la siguiente GPU (o a sí misma si está sola)
