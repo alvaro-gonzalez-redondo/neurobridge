@@ -4,8 +4,9 @@ import random
 import numpy as np
 import torch
 import torch.distributed as dist
+#import torch_scatter
 import logging
-from typing import List, Optional, Callable, ClassVar, Any, Type, Union
+from typing import List, Optional, Callable, ClassVar, Any, Type, Union, Dict
 
 
 class Node:
@@ -31,7 +32,7 @@ class Node:
         self.children.append(node)
         node.parent = self
     
-    def remove_child(self, node:Node) -> Node:
+    def remove_child(self, node:Node):
         self.children.remove(node)
 
     def _call_ready(self) -> None:
@@ -72,21 +73,23 @@ class Group(GPUNode):
         self.filter = torch.ones(self.size, dtype=torch.bool, device=self.device)
 
 
-    def where_id(self, condition: Callable[..., bool]) -> Group:
+    def where_id(self, condition: Callable[[torch.Tensor], torch.Tensor]) -> Group:
         """
-        Aplica un filtro basado en su índice.
-
+        Aplica un filtro basado en los índices (vectorizado).
+    
         Args:
-            condition: Función que toma un índice y devuelve True/False
-
+            condition: Función que recibe un tensor de índices y devuelve una máscara booleana.
+    
         Returns:
-            A sí mismo con el parámetro `filter` modificado
+            A sí mismo con el filtro actualizado.
         """
-
-        for i in range(self.size):
-            self.filter[i] &= condition(i)
-
+        idx = torch.arange(self.size, device=self.device)
+        mask = condition(idx)
+        if mask.shape != (self.size,) or mask.dtype != torch.bool:
+            raise ValueError("La función debe devolver una máscara booleana del mismo tamaño que el grupo.")
+        self.filter &= mask
         return self
+        
 
     def reset_filter(self) -> None:
         self.filter.fill_(True)
@@ -103,20 +106,24 @@ class SpatialGroup(Group):
         self.positions = torch.randn((self.size, spatial_dimensions), device=self.device)
 
 
-    def where_pos(self, condition: Callable[..., bool]) -> SpatialGroup:
+    def where_pos(self, condition: Callable[[torch.Tensor], torch.Tensor]) -> SpatialGroup:
         """
-        Aplica un filtro basado en su posición.
-
+        Aplica un filtro basado en las posiciones (vectorizado).
+    
         Args:
-            condition: Función que toma coordenadas (float) y devuelve True/False
-
+            condition: Función que toma un tensor de posiciones (n x d) y devuelve una máscara booleana.
+    
         Returns:
-            A sí mismo con el parámetro `filter` modificado
+            A sí mismo con el filtro actualizado.
         """
         if self.positions is None:
             raise RuntimeError("Este grupo no tiene posiciones definidas.")
-        for i in range(self.size):
-            self.filter[i] &= condition(*self.positions[i].tolist())
+        
+        mask = condition(self.positions)
+        if mask.shape != (self.size,) or mask.dtype != torch.bool:
+            raise ValueError("La función debe devolver una máscara booleana del mismo tamaño que el grupo.")
+        
+        self.filter &= mask
         return self
     
 
@@ -147,8 +154,20 @@ class NeuronGroup(SpatialGroup):
     
 
     def get_spikes_at(self, delays: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
-        assert delays.shape[0] == indices.shape[0]
-        assert delays.shape[0] == self.size
+        """
+        Devuelve el spike de cada neurona en `indices` con un retraso `delays`.
+        
+        Args:
+            delays: Tensor 1D de enteros con los delays (uno por índice).
+            indices: Tensor 1D con los índices de neuronas a consultar.
+        
+        Returns:
+            Tensor booleano con el spike registrado en t-delay para cada índice.
+        """
+        if indices.numel() == 0:
+            return torch.zeros(0, dtype=torch.bool, device=self.device)
+
+        assert delays.shape == indices.shape, "Delays and indices must match in shape"
 
         t_indices = (self.t - delays) % self.delay_max
         return self.spike_buffer[indices, t_indices]
@@ -191,11 +210,12 @@ class IFNeuronGroup(NeuronGroup):
     decay: torch.Tensor
 
 
-    def __init__(self, device: str, n_neurons: int, spatial_dimensions: int = 2, delay_max: int = 20, threshold: float = 1.0, decay: float = 0.95):
+    def __init__(self, device: str, n_neurons: int, spatial_dimensions: int = 2, delay_max: int = 20, threshold: float = 1.0, tau: float = 0.1):
         super().__init__(device, n_neurons, spatial_dimensions, delay_max)
         self.V = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
-        self.threshold = torch.Tensor([threshold], dtype=torch.float, device=device)
-        self.decay = torch.Tensor([decay], dtype=torch.float, device=device)
+        self.threshold = torch.tensor([threshold], dtype=torch.float, device=device)
+        decay = np.exp(-1e-3/tau)
+        self.decay = torch.tensor([decay], dtype=torch.float, device=device)
 
 
     def _process(self):
@@ -216,9 +236,16 @@ class IFNeuronGroup(NeuronGroup):
 class RandomSpikeGenerator(NeuronGroup):
     firing_rate: torch.Tensor  # En Hz
 
-    def __init__(self, device: str, n_neurons: int, firing_rate: float = 10.0, spatial_dimensions: int = 2, delay_max: int = 20):
+    def __init__(
+            self,
+            device: str,
+            n_neurons: int,
+            firing_rate: float = 10.0,
+            spatial_dimensions: int = 2,
+            delay_max: int = 20
+    ):
         super().__init__(device, n_neurons, spatial_dimensions=spatial_dimensions, delay_max=delay_max)
-        self.firing_rate = torch.Tensor([firing_rate], dtype=torch.float, device=device)
+        self.firing_rate = torch.tensor([firing_rate], dtype=torch.float, device=device)
 
 
     def _process(self):
@@ -250,10 +277,10 @@ class ConnectionOperator:
     
 
     def __call__(
-            self,
-            pattern: str = 'all-to-all',
-            synapse_class: Optional[Type[SynapticGroup]] = None,
-            **kwargs: Any
+        self,
+        pattern: str = 'all-to-all',
+        synapse_class: Optional[Type[SynapticGroup]] = None,
+        **kwargs: Any
     ) -> SynapticGroup:
 
         self.pattern = pattern
@@ -270,24 +297,25 @@ class ConnectionOperator:
 
         elif pattern == 'specific':
             try:
-                source_indices = self._compute_parameter(kwargs['idx_pre'])
-                target_indices = self._compute_parameter(kwargs['idx_pos'])
+                source_indices = self._compute_parameter(kwargs['idx_pre'], kwargs['idx_pre'], kwargs['idx_pre'])
+                target_indices = self._compute_parameter(kwargs['idx_pos'], kwargs['idx_pos'], kwargs['idx_pos'])
             except KeyError:
                 raise RuntimeError("Faltan 'idx_pre' o 'idx_pos' en los parámetros para el patrón 'specific'.")
         
-        # TODO: elif pattern == '...'
+        elif pattern == 'one-to-one':
+            assert valid_pre.numel() == valid_pos.numel()
+            source_indices = valid_pre.clone()
+            target_indices = valid_pos.clone()
 
         else:
             raise NotImplementedError(f"Patrón de conexión '{pattern}' no implementado.")
 
+        # Parámetros comunes a todas las sinapsis
+        delay = self._compute_parameter(kwargs.get('delay', 0), source_indices, target_indices).to(torch.long)
+        weight = self._compute_parameter(kwargs.get('weight', 0.0), source_indices, target_indices)
+
         # Crear objeto sináptico
         if synapse_class is None or synapse_class is StaticSynapse:
-            try:
-                delay = self._compute_parameter(kwargs['delay'], source_indices, target_indices).to(torch.long)
-                weight = self._compute_parameter(kwargs['weight'], source_indices, target_indices)
-            except KeyError:
-                raise RuntimeError("Faltan 'delay' o 'weight' en los parámetros para StaticSynapse.")
-            
             connection = StaticSynapse(
                 pre=self.pre,
                 pos=self.pos,
@@ -297,8 +325,25 @@ class ConnectionOperator:
                 weight=weight
             )
 
+        elif synapse_class is STDPSynapse:
+            connection = STDPSynapse(
+                pre=self.pre,
+                pos=self.pos,
+                idx_pre=source_indices,
+                idx_pos=target_indices,
+                delay=delay,
+                weight=weight,
+                A_plus=kwargs.get('A_plus', 0.01),
+                A_minus=kwargs.get('A_minus', 0.012),
+                tau_plus=kwargs.get('tau_plus', 20.0),
+                tau_minus=kwargs.get('tau_minus', 20.0),
+                dt=kwargs.get('dt', 1.0),
+                w_min=kwargs.get('w_min', 0.0),
+                w_max=kwargs.get('w_max', 1.0)
+            )
+
         else:
-            raise NotImplementedError(f"Clase de sinapsis '{synapse_class}' no implementada o no especificada.")
+            raise NotImplementedError(f"Clase de sinapsis '{synapse_class}' no soportada.")
 
         # Limpiar filtros tras conectar
         self.pre.reset_filter()
@@ -310,41 +355,40 @@ class ConnectionOperator:
     def _compute_parameter(
         self,
         param: Any,
-        idx_pre: Optional[torch.Tensor] = None,
-        idx_post: Optional[torch.Tensor] = None
+        idx_pre: torch.Tensor,
+        idx_post: torch.Tensor
     ) -> torch.Tensor:
         """
         Calcula un tensor de parámetros por conexión a partir de:
-        - Un valor escalar: se replica.
-        - Un tensor: se usa directamente o se expande.
-        - Una función: se evalúa por conexión usando (idx_pre, idx_post).
+        - Escalar: se replica.
+        - Tensor: se usa directamente o se expande.
+        - Lista: se convierte a tensor.
+        - Función: se aplica vectorizadamente a idx_pre, idx_post (ambos tensores).
         """
+        n = len(idx_pre)
+    
         if callable(param):
-            if idx_pre is None or idx_post is None:
-                raise ValueError("Se requieren 'idx_pre' y 'idx_post' si el parámetro es una función.")
-            n = len(idx_pre)
-            values = torch.zeros(n, device=self.device)
-            for i in range(n):
-                values[i] = param(idx_pre[i].item(), idx_post[i].item())
-        
+            values = param(idx_pre, idx_post)
+            if not isinstance(values, torch.Tensor):
+                raise TypeError("Las funciones deben devolver un tensor.")
+            if values.shape[0] != n:
+                raise ValueError(f"El tensor devuelto debe tener tamaño {n}, pero tiene {values.shape[0]}.")
+            return values.to(device=self.device)
+    
         elif isinstance(param, torch.Tensor):
-            n = len(idx_pre) if idx_pre is not None else param.shape[0]
             if param.numel() == 1:
-                values = torch.full((n,), param.item(), device=self.device)
-            else:
-                if param.numel() != n:
-                    raise ValueError(f"Expected a tensor of length {n}, but got {param.numel()}.")
-                values = param.to(device=self.device)
-        
-        elif isinstance(param, List):
+                return torch.full((n,), param.item(), device=self.device)
+            if param.numel() != n:
+                raise ValueError(f"Expected a tensor of length {n}, got {param.numel()}.")
+            return param.to(device=self.device)
+    
+        elif isinstance(param, list):
             param = torch.tensor(param, device=self.device)
-            values = self._compute_parameter(param)
-        
-        else:
-            n = len(idx_pre) if idx_pre is not None else 1
-            values = torch.full((n,), float(param), device=self.device)
+            return self._compute_parameter(param, idx_pre, idx_post)
+    
+        else:  # Escalar
+            return torch.full((n,), float(param), device=self.device)
 
-        return values
 
 
 class SynapticGroup(Group):
@@ -389,10 +433,7 @@ class SynapticGroup(Group):
         (aquellas cuyo pre-sináptico ha disparado con su delay correspondiente).
         """
         spikes = self.pre.get_spikes_at(self.delay, self.idx_pre)
-        active_indices = None
-        if torch.any(spikes):
-            active_indices = spikes.nonzero(as_tuple=True)[0]
-        return active_indices
+        return torch.where(spikes)[0]
     
 
     def _propagate(self) -> None:
@@ -431,6 +472,118 @@ class StaticSynapse(SynapticGroup):
         pass
         
 
+class STDPSynapse(SynapticGroup):
+    weight: torch.Tensor
+    A_plus: float
+    A_minus: float
+    tau_plus: float
+    tau_minus: float
+    dt: float
+    w_min: float
+    w_max: float
+    x_pre: torch.Tensor
+    x_pos: torch.Tensor
+    alpha_pre: float
+    alpha_pos: float
+    _current_buffer: torch.Tensor
+
+    def __init__(
+        self,
+        pre: NeuronGroup,
+        pos: NeuronGroup,
+        idx_pre: torch.Tensor,
+        idx_pos: torch.Tensor,
+        delay: torch.Tensor,
+        weight: Union[float, torch.Tensor],
+        A_plus: float = 0.01,
+        A_minus: float = 0.012,
+        tau_plus: float = 20.0,
+        tau_minus: float = 20.0,
+        dt: float = 1.0,
+        w_min: float = 0.0,
+        w_max: float = 1.0
+    ):
+        super().__init__(pre, pos, idx_pre, idx_pos, delay)
+        self.weight = (
+            torch.full((len(idx_pre),), float(weight), dtype=torch.float32, device=self.device)
+            if isinstance(weight, (int, float))
+            else weight.to(device=self.device)
+        )
+
+        # Optimization attempts to avoid cache misses
+        #sorted_indices = torch.argsort(self.idx_pre)
+        #self.idx_pre = self.idx_pre[sorted_indices]
+        #self.idx_pos = self.idx_pos[sorted_indices]
+        #self.weight = self.weight[sorted_indices]
+
+        self._current_buffer = torch.zeros(self.pos.size, device=self.device)
+        
+        self.A_plus = A_plus
+        self.A_minus = A_minus
+        self.tau_plus = tau_plus
+        self.tau_minus = tau_minus
+        self.dt = dt
+        self.w_min = w_min
+        self.w_max = w_max
+
+        self.x_pre = torch.zeros(pre.size, dtype=torch.float32, device=self.device)
+        self.x_pos = torch.zeros(pos.size, dtype=torch.float32, device=self.device)
+
+        self.alpha_pre = float(torch.exp(torch.tensor(-dt / tau_plus)))
+        self.alpha_pos = float(torch.exp(torch.tensor(-dt / tau_minus)))
+
+
+    def _propagate(self) -> None:
+        valid = self._spiked
+        if valid is None:
+            return
+
+        tgt = self.idx_pos[valid]
+        wgt = self.weight[valid]
+        
+        # Multiple optimization attempts, A and C are best and equal, but A is simpler.
+        # Opción A
+        self._current_buffer.zero_()
+        self._current_buffer.index_add_(0, tgt, wgt)
+        # Opción B
+        #self._current_buffer.scatter_reduce_(0, tgt, wgt, reduce="sum", include_self=True)
+        # Opción C
+        #self._current_buffer = torch_scatter.scatter_add(wgt, tgt, dim=0, dim_size=self.pos.size)
+
+        self.pos.inject_currents(self._current_buffer)
+
+
+    def _update(self) -> None:
+        t = self.pre.t
+
+        self.x_pre *= self.alpha_pre
+        self.x_pos *= self.alpha_pos
+
+        # Spikes relevantes con los delays correctos
+        pre_spikes = self.pre.get_spikes_at(self.delay, self.idx_pre)
+        pos_spikes = self.pos.get_spikes_at(torch.full_like(self.idx_pos, 1), self.idx_pos)
+
+        # Actualización de trazas
+        self.x_pre[self.idx_pre[pre_spikes]] += 1.0
+        self.x_pos[self.idx_pos[pos_spikes]] += 1.0
+
+        # STDP - pre dispara antes que post
+        if torch.any(pre_spikes):
+            indices = pre_spikes.nonzero(as_tuple=True)[0]
+            post_indices = self.idx_pos[indices]
+            dw = self.A_plus * self.x_pos[post_indices]
+            self.weight[indices] += dw
+
+        # STDP - post dispara después que pre
+        if torch.any(pos_spikes):
+            indices = pos_spikes.nonzero(as_tuple=True)[0]
+            pre_indices = self.idx_pre[indices]
+            dw = -self.A_minus * self.x_pre[pre_indices]
+            self.weight[indices] += dw
+
+        self.weight.clamp_(self.w_min, self.w_max)
+
+
 def bool_to_uint8(x: torch.Tensor) -> torch.Tensor:
     # Aplanar el tensor primero
     x_flat = x.flatten().to(torch.uint8)
@@ -456,6 +609,8 @@ class BridgeNeuronGroup(NeuronGroup):
     write_buffer: torch.Tensor
     _gathered: List[torch.Tensor]
     _time_range: torch.Tensor
+    _comm_req: Optional[Work]
+    _comm_result: Optional[torch.Tensor]
 
 
     def __init__(self, device: torch.device, rank: int, world_size: int, n_local_neurons: int, n_bridge_steps: int, spatial_dimensions: int=2, delay_max: int=20):
@@ -470,6 +625,8 @@ class BridgeNeuronGroup(NeuronGroup):
         self._gathered = [torch.empty_like(dummy_packed) for _ in range(world_size)]
         self._time_range = torch.arange(self.n_bridge_steps, dtype=torch.long, device=device)
         assert n_bridge_steps<delay_max, "Bridge steps must be lower than the bridge neuron population's max delay."
+        self._comm_req: Optional[Work] = None
+        self._comm_result: Optional[torch.Tensor] = None
 
 
     # Any positive input to a bridge neuron will automatically generate a spike
@@ -495,42 +652,157 @@ class BridgeNeuronGroup(NeuronGroup):
     def _process(self):
         super()._process()
     
-        # COMUNICACIÓN
-        if self.t % self.n_bridge_steps == 0:
-            result = None
-
-            if is_distributed():
-                # Aplanar y empaquetar el buffer de escritura para comunicación
+        result = None
+        phase = self.t % self.n_bridge_steps
+    
+        if is_distributed():
+            if phase == self.n_bridge_steps - 1:
+                # Lanzar comunicación asíncrona
                 write_buffer_flat = self.write_buffer.flatten()
                 packed = bool_to_uint8(write_buffer_flat)
-                
-                # Sincronizar entre GPUs
-                dist.all_gather(self._gathered, packed)
-                
-                # Desempaquetar y reshapear
+                self._comm_req = dist.all_gather(self._gathered, packed, async_op=True)
+    
+            elif phase == 0 and self._comm_req is not None:
+                # Esperar a que termine y procesar
+                self._comm_req.wait()
+    
                 bool_list = []
                 for p in self._gathered:
-                    # Desempaquetar a booleanos
                     unpacked = uint8_to_bool(p, self.n_bits)
-                    # Reshapear a la forma original
                     reshaped = unpacked.reshape(self.n_local_neurons, self.n_bridge_steps)
                     bool_list.append(reshaped)
-                
-                # Concatenar resultados de todas las GPUs
+    
                 result = torch.cat(bool_list, dim=0)
-                
-                # Limpiar buffer después de comunicar
+                self._comm_req = None  # Limpiar
+    
+                # Limpiar buffer tras uso
                 self.write_buffer.fill_(False)
-                dist.barrier()
-            else:
-                # Modo no distribuido, usar buffer local
+    
+        else:
+            # Modo no distribuido, mismo tratamiento pero inmediato
+            if phase == 0:
                 result = self.write_buffer.clone()
                 self.write_buffer.fill_(False)
+    
+        # AÑADIR SPIKES FUTUROS
+        if result is not None:
+            time_indices = (self.t + self._time_range) % self.delay_max
+            self.spike_buffer.index_copy_(1, time_indices, result)
+
+
+    
+    def where_rank(self, rank: int) -> BridgeNeuronGroup:
+        """
+        Aplica un filtro que selecciona únicamente las neuronas puente asociadas a un rank específico.
+    
+        Args:
+            rank: Índice del proceso (GPU) cuyos axones puente se desean filtrar.
+    
+        Returns:
+            El propio grupo, con el filtro actualizado.
+        """
+        if rank < 0 or rank >= self.size // self.n_local_neurons:
+            raise ValueError(f"El rank {rank} está fuera del rango válido.")
         
-            # AÑADIR SPIKES FUTUROS
-            if result is not None:
-                time_indices = (self.t + self._time_range) % self.delay_max
-                self.spike_buffer.index_copy_(1, time_indices, result)
+        start = rank * self.n_local_neurons
+        end = (rank + 1) * self.n_local_neurons
+        idx = torch.arange(self.size, device=self.device)
+        mask = (idx >= start) & (idx < end)
+        self.filter &= mask
+        return self
+
+
+
+class SpikeMonitor(Node):
+    groups: List[NeuronGroup]
+    filters: List[torch.Tensor]
+    recorded_spikes: List[List[torch.Tensor]]  # Por grupo: lista de tensores [N_spikes, 2] (neuron_idx, t)
+
+
+    def __init__(self, groups: List[NeuronGroup]):
+        super().__init__()
+        self.groups = groups
+        self.filters = [group.filter.nonzero(as_tuple=True)[0] for group in groups]
+        self.recorded_spikes = [[] for _ in groups]
+
+
+    def _process(self):
+        super()._process()
+        for i, (group, filter) in enumerate(zip(self.groups, self.filters)):
+            delay_max = group.delay_max
+
+            if group.t % delay_max != delay_max-1:
+                continue
+
+            buffer = group.spike_buffer  # shape: [N, D]
+            spike_indices = buffer.nonzero(as_tuple=False)  # shape: [N_spikes, 2]
+            if spike_indices.numel() == 0:
+                continue
+
+            neuron_ids = spike_indices[:, 0]
+            is_filtered = torch.isin(neuron_ids, filter)
+            neuron_ids = neuron_ids[is_filtered]
+
+            delay_slots = spike_indices[:, 1][is_filtered]
+            times = group.t - delay_max + delay_slots
+
+            spikes_tensor = torch.stack([neuron_ids, times], dim=1)  # shape: [N_spikes, 2]
+            self.recorded_spikes[i].append(spikes_tensor)
+
+
+    def get_spike_tensor(self, group_index: int, to_cpu: bool = True) -> torch.Tensor:
+        """
+        Devuelve un tensor [N_total_spikes, 2] con (neuron_id, time) para un grupo dado.
+        """
+        device = self.groups[group_index].device if not to_cpu else 'cpu'
+        if not self.recorded_spikes[group_index]:
+            return torch.empty((0, 2), dtype=torch.long, device=device)
+        return torch.cat(self.recorded_spikes[group_index], dim=0).to(device)
+
+
+class VariableMonitor(Node):
+    groups: List[Group]
+    filters: List[torch.Tensor]
+    variable_names: List[str]
+    recorded_values: List[Dict[str, List[torch.Tensor]]]  # [group_idx][var_name] = list of tensors over time
+
+    def __init__(self, groups: List[Group], variable_names: List[str]):
+        super().__init__()
+        self.groups = groups
+        self.filters = [group.filter.nonzero(as_tuple=True)[0] for group in groups]
+        self.variable_names = variable_names
+
+        # recorded_values[i][var] = lista de tensores por tiempo
+        self.recorded_values = [
+            {var_name: [] for var_name in variable_names}
+            for _ in groups
+        ]
+
+
+    def _process(self):
+        super()._process()
+        for i, (group, filter) in enumerate(zip(self.groups, self.filters)):
+            for var_name in self.variable_names:
+                value = getattr(group, var_name, None)
+                if value is None:
+                    raise AttributeError(f"Group {i} does not have variable '{var_name}'.")
+
+                if not isinstance(value, torch.Tensor):
+                    raise TypeError(f"Monitored variable '{var_name}' is not a torch.Tensor.")
+
+                # Copiar para evitar aliasing
+                self.recorded_values[i][var_name].append(value[filter].detach().clone())
+
+
+    def get_variable_tensor(self, group_index: int, var_name: str, to_cpu: bool = True) -> torch.Tensor:
+        """
+        Devuelve un tensor [T, N] con la evolución temporal de la variable dada.
+        """
+        values = self.recorded_values[group_index][var_name]
+        device = self.groups[group_index].device if not to_cpu else 'cpu'
+        if not values:
+            return torch.empty((0, self.groups[group_index].size), device=device)
+        return torch.stack(values, dim=0).to(device)
 
 
 class LocalCircuit(GPUNode):
@@ -538,6 +810,13 @@ class LocalCircuit(GPUNode):
     Contains all updatable objects of this GPU.
     Used for structural organization. It might contain future extensions for analyses and serialization/deserialization.
     """
+    bridge: Optional[BridgeNeuronGroup]
+
+
+    def __init__(self, device):
+        super().__init__(device)
+        self.bridge = None
+
     
     def get_statistics(self):
         """Recopila estadísticas de actividad de todos los componentes."""
@@ -556,8 +835,6 @@ class LocalCircuit(GPUNode):
 def is_distributed() -> bool:
     return dist.is_available() and dist.is_initialized()
 
-
-import logging
 
 # ANSI 24-bit escape codes para C0–C9 (matplotlib default color cycle)
 def rgb_escape(r, g, b):
@@ -617,7 +894,15 @@ class SimulatorEngine(Node):
     world_size: int
     rank: int
     local_circuit: LocalCircuit
-    bridge: Optional[BridgeNeuronGroup]
+
+
+    def __enter__(self):
+        self.initialize()
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        if is_distributed():
+            dist.destroy_process_group()
 
 
     def __init__(self, autoparenting_nodes=False):
@@ -652,8 +937,6 @@ class SimulatorEngine(Node):
         if autoparenting_nodes:
             Node.auto_parent = self.local_circuit
 
-        self.bridge = None
-
         # Logger
         SimulatorEngine.logger = setup_logger(self.rank)
 
@@ -676,8 +959,8 @@ class SimulatorEngine(Node):
     def initialize(self):
         # Make sure the bridge is the last Node updated in each simulation step.
         # This will be useful to allow an async `all_gather`.
-        #if self.bridge:
-            #self.local_circuit.add_child(self.bridge)
+        if self.local_circuit.bridge:
+            self.local_circuit.add_child(self.local_circuit.bridge)
         self._call_ready()
     
 
@@ -694,8 +977,8 @@ class SimulatorEngine(Node):
             n_bridge_steps = n_steps,
             spatial_dimensions=2,
             delay_max=n_steps+1)
+        self.local_circuit.bridge = bridge
         self.local_circuit.add_child(bridge)
-        return bridge
 
     
     def build_user_network(self, rank: int, world_size: int) -> None:
@@ -717,86 +1000,3 @@ def log_error(msg: str) -> None:
         SimulatorEngine.logger.error(msg)
     else:
         print(f"ERROR: {msg}")
-
-
-class PingPongRingEngine(SimulatorEngine):
-
-    def __init__(self):
-        super().__init__(autoparenting_nodes=True)
-
-    def build_user_network(self, rank: int, world_size: int):
-        n_neurons = 10
-
-        # Crear un puente neuronal (permite la comunicación entre GPUs)
-        bridge = self.add_default_bridge(n_local_neurons=n_neurons, n_steps=20)
-
-        # Crear un grupo neuronal local
-        local_neurons = ParrotGroup(self.local_circuit.device, n_neurons)
-
-        # Envía a la siguiente GPU (o a sí misma si está sola)
-        tgt = (torch.arange(n_neurons) + rank*n_neurons) % (n_neurons*world_size)
-        (local_neurons >> bridge)(
-            pattern = 'specific',
-            idx_pre = torch.arange(n_neurons),
-            idx_pos = tgt,
-            delay   = 0,
-            weight  = 1.0,
-        )
-
-        # Recibe de la GPU anterior (o de sí misma si está sola)
-        src = (torch.arange(n_neurons) + (rank-1)*n_neurons) % (n_neurons*world_size)
-        (bridge >> local_neurons)(
-            pattern = 'specific',
-            idx_pre = src,
-            idx_pos = torch.arange(n_neurons),
-            delay   = 0,
-            weight  = 1.0,
-        )
-                      
-        # Registramos las neuronas para poder monitorearlas
-        self.local_neurons = local_neurons
-        self.bridge = bridge
-
-
-# Monitorear actividad
-def monitor(engine:PingPongRingEngine):
-    step = engine.t
-    t = engine.local_neurons.t % engine.local_neurons.delay_max
-    spikes = ["|" if n else "_" for n in engine.local_neurons.spike_buffer[:, t]]
-    spikes = ''.join(spikes)
-    log(f"t={step:<6d} {spikes}")
-
-
-def feed_input(engine:PingPongRingEngine):
-    # En la primera neurona (rank 0), inyectar un spike inicial para comenzar la actividad
-    if engine.rank == 0:
-        if engine.t < engine.local_neurons.size+1:
-            initial_spikes = torch.zeros(engine.local_neurons.size, dtype=torch.bool, device=engine.local_circuit.device)
-            initial_spikes[engine.t-1] = True
-            engine.local_neurons.inject_spikes(initial_spikes)
-
-
-
-def main():
-    try:
-        engine = PingPongRingEngine()
-        engine.initialize()
-
-        # Ejecutar por más tiempo para asegurar que vemos varios ciclos
-        for _ in range(150):
-            engine.step()
-            feed_input(engine)
-            monitor(engine)
-
-    except Exception as e:
-        log_error(f"ERROR: {e}")
-        import traceback
-        log_error(traceback.format_exc())
-
-    finally:
-        if is_distributed():
-            dist.destroy_process_group()
-
-
-if __name__ == '__main__':
-    main()
