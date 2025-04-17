@@ -1,0 +1,72 @@
+2025-04-17 10:50:22,970 - [Rank0] #################################################################
+2025-04-17 10:50:22,970 - [Rank0] Neurobridge initialized. Building user network...
+2025-04-17 10:50:23,117 - [Rank0] User network built successfully.
+2025-04-17 10:50:23,650 - [Rank0] ERROR: !stack.empty() INTERNAL ASSERT FAILED at "/pytorch/torch/csrc/autograd/profiler_python.cpp":983, please report a bug to PyTorch. Python replay stack is empty.
+2025-04-17 10:50:23,652 - [Rank0] Traceback (most recent call last):
+  File "/home/alvaro/Desktop/Neurobridge project/neurobridge/examples/lib_example_02.1_oneGPU_profiling.py", line 102, in <module>
+    prof.step()
+  File "/home/alvaro/venvs/edlut/lib/python3.12/site-packages/torch/profiler/profiler.py", line 821, in step
+    self._transit_action(prev_action, self.current_action)
+  File "/home/alvaro/venvs/edlut/lib/python3.12/site-packages/torch/profiler/profiler.py", line 852, in _transit_action
+    action()
+  File "/home/alvaro/venvs/edlut/lib/python3.12/site-packages/torch/profiler/profiler.py", line 239, in stop_trace
+    self.profiler.__exit__(None, None, None)
+  File "/home/alvaro/venvs/edlut/lib/python3.12/site-packages/torch/autograd/profiler.py", line 378, in __exit__
+    self.kineto_results = _disable_profiler()
+                          ^^^^^^^^^^^^^^^^^^^
+RuntimeError: !stack.empty() INTERNAL ASSERT FAILED at "/pytorch/torch/csrc/autograd/profiler_python.cpp":983, please report a bug to PyTorch. Python replay stack is empty.
+
+2025-04-17 10:52:24,434 - [Rank0] #################################################################
+2025-04-17 10:52:24,435 - [Rank0] Neurobridge initialized. Building user network...
+2025-04-17 10:52:24,574 - [Rank0] User network built successfully.
+2025-04-17 10:52:52,950 - [Rank0] #################################################################
+2025-04-17 10:52:52,951 - [Rank0] Neurobridge initialized. Building user network...
+2025-04-17 10:52:53,066 - [Rank0] User network built successfully.
+2025-04-17 10:52:53,539 - [Rank0] ERROR: !stack.empty() INTERNAL ASSERT FAILED at "/pytorch/torch/csrc/autograd/profiler_python.cpp":983, please report a bug to PyTorch. Python replay stack is empty.
+2025-04-17 10:52:53,541 - [Rank0] Traceback (most recent call last):
+  File "/home/alvaro/Desktop/Neurobridge project/neurobridge/examples/lib_example_02.1_oneGPU_profiling.py", line 102, in <module>
+    prof.step()
+  File "/home/alvaro/venvs/edlut/lib/python3.12/site-packages/torch/profiler/profiler.py", line 821, in step
+    self._transit_action(prev_action, self.current_action)
+  File "/home/alvaro/venvs/edlut/lib/python3.12/site-packages/torch/profiler/profiler.py", line 852, in _transit_action
+    action()
+  File "/home/alvaro/venvs/edlut/lib/python3.12/site-packages/torch/profiler/profiler.py", line 239, in stop_trace
+    self.profiler.__exit__(None, None, None)
+  File "/home/alvaro/venvs/edlut/lib/python3.12/site-packages/torch/autograd/profiler.py", line 378, in __exit__
+    self.kineto_results = _disable_profiler()
+                          ^^^^^^^^^^^^^^^^^^^
+RuntimeError: !stack.empty() INTERNAL ASSERT FAILED at "/pytorch/torch/csrc/autograd/profiler_python.cpp":983, please report a bug to PyTorch. Python replay stack is empty.
+
+2025-04-17 10:57:07,703 - [Rank0] #################################################################
+2025-04-17 10:57:07,703 - [Rank0] Neurobridge initialized. Building user network...
+2025-04-17 10:57:07,821 - [Rank0] User network built successfully.
+2025-04-17 12:03:12,503 - [Rank0] #################################################################
+2025-04-17 12:03:12,503 - [Rank0] Neurobridge initialized. Building user network...
+2025-04-17 12:03:12,639 - [Rank0] User network built successfully.
+2025-04-17 12:03:18,281 - [Rank0] Gráfico guardado como 'rank0_output_1.png'
+2025-04-17 12:03:18,883 - [Rank0] Gráfico guardado como 'rank0_output_2.png'
+2025-04-17 12:03:19,184 - [Rank0] Gráfico guardado como 'rank0_output_3.png'
+2025-04-17 12:03:53,160 - [Rank0] #################################################################
+2025-04-17 12:03:53,160 - [Rank0] Neurobridge initialized. Building user network...
+2025-04-17 12:03:53,256 - [Rank0] User network built successfully.
+2025-04-17 12:03:59,237 - [Rank0] Gráfico guardado como 'rank0_output_1.png'
+2025-04-17 12:03:59,671 - [Rank0] Gráfico guardado como 'rank0_output_2.png'
+2025-04-17 12:03:59,874 - [Rank0] Gráfico guardado como 'rank0_output_3.png'
+2025-04-17 12:08:50,924 - [Rank0] #################################################################
+2025-04-17 12:08:50,924 - [Rank0] Neurobridge initialized. Building user network...
+2025-04-17 12:08:51,028 - [Rank0] User network built successfully.
+2025-04-17 12:08:57,263 - [Rank0] Gráfico guardado como 'rank0_output_1.png'
+2025-04-17 12:08:57,706 - [Rank0] Gráfico guardado como 'rank0_output_2.png'
+2025-04-17 12:08:57,935 - [Rank0] Gráfico guardado como 'rank0_output_3.png'
+2025-04-17 12:11:07,816 - [Rank0] #################################################################
+2025-04-17 12:11:07,817 - [Rank0] Neurobridge initialized. Building user network...
+2025-04-17 12:11:07,965 - [Rank0] User network built successfully.
+2025-04-17 12:11:15,335 - [Rank0] Gráfico guardado como 'rank0_output_1.png'
+2025-04-17 12:11:15,776 - [Rank0] Gráfico guardado como 'rank0_output_2.png'
+2025-04-17 12:11:15,977 - [Rank0] Gráfico guardado como 'rank0_output_3.png'
+2025-04-17 14:39:06,270 - [Rank0] #################################################################
+2025-04-17 14:39:06,270 - [Rank0] Neurobridge initialized. Building user network...
+2025-04-17 14:39:06,441 - [Rank0] User network built successfully.
+2025-04-17 14:39:13,723 - [Rank0] Gráfico guardado como 'rank0_output_1.png'
+2025-04-17 14:39:14,166 - [Rank0] Gráfico guardado como 'rank0_output_2.png'
+2025-04-17 14:39:14,369 - [Rank0] Gráfico guardado como 'rank0_output_3.png'
