@@ -1,22 +1,17 @@
-from neurobridge.all import *
-#from all import *
+#from neurobridge.all import *
+from all import *
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 
 class RandomInputSimulation(SimulatorEngine):
 
-    def __init__(self):
-        super().__init__(autoparenting_nodes=True)
-
-
     def build_user_network(self, rank: int, world_size: int):
         n_src_neurons = 1_000
-        n_tgt_neurons = 1_000
-        self.is_monitoring = False
+        n_tgt_neurons = 4_000
+        self.is_monitoring = True
 
         n_local_bridge_neurons = n_src_neurons
-        n_bridge_neurons = n_local_bridge_neurons*world_size
 
         # Crear un puente neuronal (permite la comunicación entre GPUs)
         self.add_default_bridge(n_local_neurons=n_src_neurons, n_steps=20)
@@ -24,43 +19,41 @@ class RandomInputSimulation(SimulatorEngine):
 
         if rank == 0:
 
-            src_neurons = RandomSpikeGenerator(
-                device = self.local_circuit.device,
-                n_neurons = n_src_neurons,
-                firing_rate = 10.0,
-            )
+            with self.autoparent("graph"):
+                src_neurons = RandomSpikeGenerator(
+                    device = self.local_circuit.device,
+                    n_neurons = n_src_neurons,
+                    firing_rate = 10.0,
+                )
 
-            _ = (src_neurons >> bridge.where_rank(0))(
-                pattern = 'one-to-one',
-                weight = 1.0,
-            )
-
-            if self.is_monitoring:
-                self.spike_monitor = SpikeMonitor([src_neurons])
+            with self.autoparent("normal"):
+                _ = (src_neurons >> bridge.where_rank(0))(
+                    pattern = 'one-to-one',
+                    weight = 1.0,
+                )
+    
+                if self.is_monitoring:
+                    self.spike_monitor = SpikeMonitor([src_neurons.where_id(lambda ids: ids<20)])
         
         elif rank == 1:
 
-            tgt_neurons = IFNeuronGroup(
-                device = self.local_circuit.device,
-                n_neurons = n_tgt_neurons,
-            )
-
-            stdp_conns = (bridge.where_rank(0) >> tgt_neurons)(
-                pattern = 'all-to-all',
-                synapse_class = STDPSynapse,
-                weight = lambda pre,pos: torch.rand(len(pre)) * (2.0/n_src_neurons),
-            )
-
-            if self.is_monitoring:
-                self.spike_monitor = SpikeMonitor([tgt_neurons])
-                self.voltage_monitor = VariableMonitor(
-                    [tgt_neurons.where_id(lambda ids: ids<20)], 
-                    ['V']
+            with self.autoparent("graph"):
+                tgt_neurons = IFNeuronGroup(
+                    device = self.local_circuit.device,
+                    n_neurons = n_tgt_neurons,
                 )
-                self.weight_monitor = VariableMonitor(
-                    [stdp_conns.where_id(lambda ids: ids<100)],
-                    ['weight']
+    
+                stdp_conns = (bridge.where_rank(0) >> tgt_neurons)(
+                    pattern = 'all-to-all',
+                    synapse_class = STDPSynapse,
+                    weight = lambda pre,pos: torch.rand(len(pre)) * (2.0/n_src_neurons),
                 )
+
+            with self.autoparent("normal"):
+                if self.is_monitoring:
+                    self.spike_monitor = SpikeMonitor([tgt_neurons.where_id(lambda ids: ids<20)])
+                    self.voltage_monitor = VariableMonitor([tgt_neurons.where_id(lambda ids: ids<20)], ['V'])
+                    self.weight_monitor = VariableMonitor([stdp_conns.where_id(lambda ids: ids<20)], ['weight'])
 
 
     def plot_spikes(self):
@@ -92,7 +85,7 @@ class RandomInputSimulation(SimulatorEngine):
 
 try:
     with RandomInputSimulation() as engine:
-        simulation_length = 1
+        simulation_length = 10
         simulation_steps = simulation_length * 1000
         for _ in tqdm(range(simulation_steps), disable=(engine.rank!=0)):
             engine.step()

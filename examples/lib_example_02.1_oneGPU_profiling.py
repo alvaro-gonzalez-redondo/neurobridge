@@ -1,9 +1,8 @@
 #from neurobridge.all import *
 
-import sys
-sys.path.insert(0, '..')
-
+import sys; sys.path.insert(0, '..')
 from all import *
+
 import torch
 import torch.profiler
 from matplotlib import pyplot as plt
@@ -12,47 +11,47 @@ from tqdm import tqdm
 
 class RandomInputSimulation(SimulatorEngine):
 
-    def __init__(self):
-        super().__init__(autoparenting_nodes=True)
-
-
     def build_user_network(self, rank: int, world_size: int):
         n_src_neurons = 1000
         n_tgt_neurons = 1210
         self.is_monitoring = True
 
-        src_neurons = RandomSpikeGenerator(
-            device = self.local_circuit.device,
-            n_neurons = n_src_neurons,
-            firing_rate = 10.0,
-        )
+        with self.autoparent('graph'):
 
-        tgt_neurons = IFNeuronGroup(
-            device = self.local_circuit.device,
-            n_neurons = n_tgt_neurons,
-        )
+            src_neurons = RandomSpikeGenerator(
+                device = self.local_circuit.device,
+                n_neurons = n_src_neurons,
+                firing_rate = 10.0,
+            )
 
-        stdp_conns = (src_neurons >> tgt_neurons)(
-            pattern = 'all-to-all',
-            synapse_class = STDPSynapse,
-            weight = lambda pre,pos: torch.rand(len(pre)) * 1.9e-3
-        )
+            tgt_neurons = IFNeuronGroup(
+                device = self.local_circuit.device,
+                n_neurons = n_tgt_neurons,
+            )
 
-        if self.is_monitoring:
-            self.spike_monitor = SpikeMonitor(
-                [
-                    src_neurons, #src_neurons.where_id(lambda i: i%10==0),
-                    tgt_neurons, #tgt_neurons.where_pos(lambda p: p[:,0]>0.5)
-                ]
+            stdp_conns = (src_neurons >> tgt_neurons)(
+                pattern = 'all-to-all',
+                synapse_class = STDPSynapse,
+                weight = lambda pre,pos: torch.rand(len(pre)) * 1.9e-3
             )
-            self.voltage_monitor = VariableMonitor(
-                [tgt_neurons.where_id(lambda ids: ids<100)], 
-                ['V']
-            )
-            self.weight_monitor = VariableMonitor(
-                [stdp_conns.where_id(lambda ids: ids<100)], 
-                ['weight']
-            )
+
+        with self.autoparent():
+
+            if self.is_monitoring:
+                self.spike_monitor = SpikeMonitor(
+                    [
+                        src_neurons, #src_neurons.where_id(lambda i: i%10==0),
+                        tgt_neurons, #tgt_neurons.where_pos(lambda p: p[:,0]>0.5)
+                    ]
+                )
+                self.voltage_monitor = VariableMonitor(
+                    [tgt_neurons.where_id(lambda ids: ids<100)], 
+                    ['V']
+                )
+                self.weight_monitor = VariableMonitor(
+                    [stdp_conns.where_id(lambda ids: ids<100)], 
+                    ['weight']
+                )
 
 
     def plot_spikes(self):
@@ -86,10 +85,10 @@ class RandomInputSimulation(SimulatorEngine):
 
 try:
     with RandomInputSimulation() as engine:
-        simulation_length = 1
-        simulation_steps = simulation_length * 1000
+        simulation_length = 1.0
+        simulation_steps = int(simulation_length * 1000)
 
-        with torch.profiler.profile(
+        prof = torch.profiler.profile(
             activities=[
                 torch.profiler.ProfilerActivity.CPU,
                 torch.profiler.ProfilerActivity.CUDA,
@@ -99,11 +98,10 @@ try:
             record_shapes=True,
             profile_memory=True,
             with_stack=True,
-        ) as prof:
+        )
 
-            for _ in tqdm(range(simulation_steps)):
-                engine.step()
-                prof.step()
+        for _ in tqdm(range(simulation_steps)):
+            engine.step(prof)
         
         if engine.is_monitoring:
             engine.plot_spikes()
