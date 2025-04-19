@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 
 import contextlib, contextvars
 
+import copy
+
 
 class ParentStack(contextlib.AbstractContextManager):
     _stack_var = contextvars.ContextVar("_stack", default=[])
@@ -99,6 +101,12 @@ class Group(GPUNode):
         self.filter = torch.ones(self.size, dtype=torch.bool, device=self.device)
 
 
+    def _clone_with_new_filter(self) -> Group:
+        clone = copy.copy(self)
+        clone.filter = clone.filter.clone()
+        return clone
+
+
     def where_id(self, condition: Callable[[torch.Tensor], torch.Tensor]) -> Group:
         """
         Aplica un filtro basado en los índices (vectorizado).
@@ -109,12 +117,13 @@ class Group(GPUNode):
         Returns:
             A sí mismo con el filtro actualizado.
         """
-        idx = torch.arange(self.size, device=self.device)
+        clone = self._clone_with_new_filter()
+        idx = torch.arange(clone.size, device=clone.device)
         mask = condition(idx)
-        if mask.shape != (self.size,) or mask.dtype != torch.bool:
+        if mask.shape != (clone.size,) or mask.dtype != torch.bool:
             raise ValueError("La función debe devolver una máscara booleana del mismo tamaño que el grupo.")
-        self.filter &= mask
-        return self
+        clone.filter &= mask
+        return clone
         
 
     def reset_filter(self) -> None:
@@ -142,15 +151,17 @@ class SpatialGroup(Group):
         Returns:
             A sí mismo con el filtro actualizado.
         """
-        if self.positions is None:
+        clone = self._clone_with_new_filter()
+
+        if clone.positions is None:
             raise RuntimeError("Este grupo no tiene posiciones definidas.")
         
-        mask = condition(self.positions)
-        if mask.shape != (self.size,) or mask.dtype != torch.bool:
+        mask = condition(clone.positions)
+        if mask.shape != (clone.size,) or mask.dtype != torch.bool:
             raise ValueError("La función debe devolver una máscara booleana del mismo tamaño que el grupo.")
         
-        self.filter &= mask
-        return self
+        clone.filter &= mask
+        return clone
     
 
 class NeuronGroup(SpatialGroup):
@@ -672,15 +683,17 @@ class BridgeNeuronGroup(NeuronGroup):
         Returns:
             El propio grupo, con el filtro actualizado.
         """
-        if rank < 0 or rank >= self.size // self.n_local_neurons:
+        clone = self._clone_with_new_filter()
+
+        if rank < 0 or rank >= clone.size // clone.n_local_neurons:
             raise ValueError(f"El rank {rank} está fuera del rango válido.")
         
-        start = rank * self.n_local_neurons
-        end = (rank + 1) * self.n_local_neurons
-        idx = torch.arange(self.size, device=self.device)
+        start = rank * clone.n_local_neurons
+        end = (rank + 1) * clone.n_local_neurons
+        idx = torch.arange(clone.size, device=clone.device)
         mask = (idx >= start) & (idx < end)
-        self.filter &= mask
-        return self
+        clone.filter &= mask
+        return clone
 
 
     def _bool_to_uint8(self, x: torch.Tensor) -> torch.Tensor:
@@ -998,7 +1011,6 @@ class SimulatorEngine(Node):
         self.local_circuit.t += 1
 
     
-
     def add_default_bridge(self, n_local_neurons: int, n_steps: int):
         bridge = BridgeNeuronGroup(
             device = self.local_circuit.device,

@@ -1,6 +1,6 @@
-#from neurobridge.all import *
-import sys; sys.path.insert(0, '..')
-from all import *
+from neurobridge.all import *
+#import sys; sys.path.insert(0, '..')
+#from all import *
 
 from matplotlib import pyplot as plt
 from tqdm import tqdm
