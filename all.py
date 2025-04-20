@@ -80,6 +80,7 @@ class Node:
     def _process(self) -> None:
         """Override this to define what the node does each step."""
         pass
+        #log(f"{type(self)}._process()")
 
 
 class GPUNode(Node):
@@ -354,6 +355,8 @@ class ConnectionOperator:
         delay = self._compute_parameter(kwargs.get('delay', 0), source_indices, target_indices).to(torch.long)
         weight = self._compute_parameter(kwargs.get('weight', 0.0), source_indices, target_indices)
 
+        assert torch.all(delay<self.pre.delay_max), f"Connection delay ({torch.max(delay)}) must be less than the `delay_max` parameter of the presynaptic population ({self.pre.delay_max})."
+
         # Crear objeto sináptico
         if synapse_class is None or synapse_class is StaticSynapse:
             connection = StaticSynapse(
@@ -577,7 +580,7 @@ class BridgeNeuronGroup(NeuronGroup):
     n_local_neurons: int
     rank: int
     n_bridge_steps: int
-    write_buffer: torch.Tensor
+    _write_buffer: torch.Tensor
     _gathered: List[torch.Tensor]
     _time_range: torch.Tensor
     _comm_req: Optional[dist.Work]
@@ -590,7 +593,7 @@ class BridgeNeuronGroup(NeuronGroup):
         self.n_bridge_steps = n_bridge_steps
         self.rank = rank
         self.n_bits = n_local_neurons * n_bridge_steps
-        self.write_buffer = torch.zeros((n_local_neurons, n_bridge_steps), dtype=torch.bool, device=device)
+        self._write_buffer = torch.zeros((n_local_neurons, n_bridge_steps), dtype=torch.bool, device=device)
         # Crear buffer para comunicación
         self._bool2uint8_weights = torch.tensor([1,2,4,8,16,32,64,128], dtype=torch.uint8, device=device)
         dummy_packed = self._bool_to_uint8(torch.zeros(n_local_neurons * n_bridge_steps, dtype=torch.bool, device=device))
@@ -608,18 +611,11 @@ class BridgeNeuronGroup(NeuronGroup):
         to_id = (self.rank + 1) * self.n_local_neurons
         subset = I[from_id:to_id]  # [n_local_neurons]
 
-        if False:
-            t_mod = SimulatorEngine.engine.local_circuit.t % self.n_bridge_steps
-            current_column = self.write_buffer[:, t_mod].squeeze(1)
-
-            mask = subset > 0  # [n_local_neurons]
-            current_column |= mask  # In-place bitwise OR
-        else:
-            t_mod = SimulatorEngine.engine.local_circuit.t % self.n_bridge_steps
-            mask = subset > 0  # [n_local_neurons]
-            self.write_buffer.index_copy_(1, t_mod, (
-                self.write_buffer.index_select(1, t_mod) | mask.unsqueeze(1)
-                ))
+        t_mod = SimulatorEngine.engine.local_circuit.t % self.n_bridge_steps
+        mask = subset > 0  # [n_local_neurons]
+        self._write_buffer.index_copy_(1, t_mod, (
+            self._write_buffer.index_select(1, t_mod) | mask.unsqueeze(1)
+            ))
 
 
     # Any injected spike to a bridge neuron will automatically generate a spike
@@ -628,49 +624,62 @@ class BridgeNeuronGroup(NeuronGroup):
         from_id = self.rank * self.n_local_neurons
         to_id = (self.rank+1) * self.n_local_neurons
         subset = spikes[from_id:to_id].bool()
-        indices = subset.nonzero(as_tuple=True)[0]
-        self.write_buffer[indices, SimulatorEngine.engine.local_circuit.t % self.n_bridge_steps] = True
+        
+        #indices = subset.nonzero(as_tuple=True)[0]
+        #self.write_buffer[indices, SimulatorEngine.engine.local_circuit.t % self.n_bridge_steps] = True
+        t_mod = SimulatorEngine.engine.local_circuit.t % self.n_bridge_steps
+        mask = subset > 0  # [n_local_neurons]
+        self._write_buffer.index_copy_(1, t_mod, (
+            self._write_buffer.index_select(1, t_mod) | mask.unsqueeze(1)
+            ))
 
 
     def _process(self):
         super()._process()
-    
-        result = None
-        phase = SimulatorEngine.engine.local_circuit.t % self.n_bridge_steps
-    
+
+        t = SimulatorEngine.engine.local_circuit.t
+        phase = t % self.n_bridge_steps
+
         if is_distributed():
+            # --- al final del bloque: empaquetar, limpiar y lanzar gather asíncrono ---
             if phase == self.n_bridge_steps - 1:
-                # Lanzar comunicación asíncrona
-                write_buffer_flat = self.write_buffer.flatten()
+                # 1) Aplana y empaqueta
+                write_buffer_flat = self._write_buffer.flatten()
                 packed = self._bool_to_uint8(write_buffer_flat)
+
+                # 2) Limpia para el siguiente bloque
+                self._write_buffer.fill_(False)
+
+                # 3) Gather asíncrono
                 self._comm_req = dist.all_gather(self._gathered, packed, async_op=True)
-    
-            elif phase == 0 and self._comm_req is not None:
-                # Esperar a que termine y procesar
+
+            # --- al inicio del bloque siguiente: esperar, reconstruir y volcar al buffer ---
+            elif phase == 0 and getattr(self, "_comm_req", None) is not None:
+                # 4) Espera a que termine el gather
                 self._comm_req.wait()
-    
+
+                # 5) Reconstruye el tensor [n_total_neurons x n_bridge_steps]
                 bool_list = []
                 for p in self._gathered:
                     unpacked = self._uint8_to_bool(p, self.n_bits)
-                    reshaped = unpacked.reshape(self.n_local_neurons, self.n_bridge_steps)
+                    reshaped = unpacked.view(self.n_local_neurons, self.n_bridge_steps)
                     bool_list.append(reshaped)
-    
                 result = torch.cat(bool_list, dim=0)
-                self._comm_req = None  # Limpiar
-    
-                # Limpiar buffer tras uso
-                self.write_buffer.fill_(False)
-    
+
+                # 6) Programa esos spikes en el futuro
+                time_indices = (t + self._time_range + 1) % self.delay_max
+                self._spike_buffer.index_copy_(1, time_indices, result)
+
+                # 7) Limpia el handle para el próximo bloque
+                self._comm_req = None
+
         else:
-            # Modo no distribuido, mismo tratamiento pero inmediato
-            if phase == 0:
-                result = self.write_buffer.clone()
-                self.write_buffer.fill_(False)
-    
-        # AÑADIR SPIKES FUTUROS
-        if result is not None:
-            time_indices = (SimulatorEngine.engine.local_circuit.t + self._time_range) % self.delay_max
-            self._spike_buffer.index_copy_(1, time_indices, result)
+            # Modo no distribuido (igual que antes)
+            if phase == self.n_bridge_steps - 1:
+                time_indices = (t + 1 + self._time_range) % self.delay_max
+                self._spike_buffer.index_copy_(1, time_indices, self._write_buffer)
+                self._write_buffer.fill_(False)
+
 
     
     def where_rank(self, rank: int) -> BridgeNeuronGroup:
@@ -729,10 +738,11 @@ class SpikeMonitor(Node):
 
     def _process(self):
         super()._process()
+        t = SimulatorEngine.engine.local_circuit.t.item()
         for i, (group, filter) in enumerate(zip(self.groups, self.filters)):
             delay_max = group.delay_max
 
-            if SimulatorEngine.engine.local_circuit.t % delay_max != delay_max-1:
+            if (t % delay_max) != (delay_max - 1):
                 continue
 
             buffer = group.get_spike_buffer()  # shape: [N, D]
@@ -997,7 +1007,7 @@ class SimulatorEngine(Node):
         # Capturing the graph
         with torch.cuda.graph(self.local_circuit.graph, stream=self.local_circuit.graph_stream):
             self.local_circuit.graph_root._call_process()
-        self.local_circuit.t += 1
+        self.local_circuit.t.zero_()
     
 
     def step(self):
