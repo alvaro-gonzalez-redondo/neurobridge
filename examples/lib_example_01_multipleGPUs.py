@@ -1,10 +1,8 @@
-from neurobridge.all import *
-
-#import sys; sys.path.insert(0, '..')
-#from all import *
-
+import torch
 from matplotlib import pyplot as plt
 from tqdm import tqdm
+
+from neurobridge import SimulatorEngine, NeuronGroup,ParrotNeurons, SpikeMonitor, show_or_save_plot, log, log_error
 
 
 class PingPongRingSimulation(SimulatorEngine):
@@ -21,7 +19,7 @@ class PingPongRingSimulation(SimulatorEngine):
 
         with self.autoparent("graph"):
             # Crear un grupo neuronal local
-            local_neurons = ParrotGroup(self.local_circuit.device, n_neurons, delay_max=20)
+            local_neurons = ParrotNeurons(self.local_circuit.device, n_neurons, delay_max=20)
 
             # Envía a la siguiente GPU (o a sí misma si está sola)
             if True:

@@ -1,9 +1,9 @@
-from neurobridge.all import *
-#import sys; sys.path.insert(0, '..')
-#from all import *
-
 from matplotlib import pyplot as plt
 from tqdm import tqdm
+
+from neurobridge import SimulatorEngine, RandomSpikeNeurons, IFNeurons, STDPSynapse, SpikeMonitor, show_or_save_plot, log, log_error
+
+import torch
 
 
 class RandomInputSimulation(SimulatorEngine):
@@ -15,13 +15,13 @@ class RandomInputSimulation(SimulatorEngine):
 
         with self.autoparent('graph'):
 
-            src_neurons = RandomSpikeGenerator(
+            src_neurons = RandomSpikeNeurons(
                 device = self.local_circuit.device,
                 n_neurons = n_src_neurons,
                 firing_rate = 10.0,
             )
 
-            tgt_neurons = IFNeuronGroup(
+            tgt_neurons = IFNeurons(
                 device = self.local_circuit.device,
                 n_neurons = n_tgt_neurons,
             )
