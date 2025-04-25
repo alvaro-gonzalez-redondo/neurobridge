@@ -24,7 +24,9 @@ def uint8_to_bool(x: torch.Tensor, num_bits: int) -> torch.Tensor:
     return bits.flatten()[:num_bits]
 
 
-def run_benchmark(A: int, B: int, iters: int, rank: int, world_size: int, device: torch.device):
+def run_benchmark(
+    A: int, B: int, iters: int, rank: int, world_size: int, device: torch.device
+):
     total_time = 0.0
     num_bits = A * B
 
@@ -59,8 +61,12 @@ def run_benchmark(A: int, B: int, iters: int, rank: int, world_size: int, device
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--A", type=int, default=100, help="Filas de la matriz booleana local")
-    parser.add_argument("--B", type=int, default=100, help="Columnas de la matriz booleana local")
+    parser.add_argument(
+        "--A", type=int, default=100, help="Filas de la matriz booleana local"
+    )
+    parser.add_argument(
+        "--B", type=int, default=100, help="Columnas de la matriz booleana local"
+    )
     parser.add_argument("--iters", type=int, default=50, help="Número de repeticiones")
     args = parser.parse_args()
 

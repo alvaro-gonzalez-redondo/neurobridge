@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .core import _GPUNode
+from .core import GPUNode
 
 from typing import Callable
 
@@ -8,74 +8,184 @@ import copy
 import torch
 
 
-class _Group(_GPUNode):
+class _Group(GPUNode):
+    """Base class for groups of elements with filtering capabilities.
+
+    A _Group represents a collection of elements that can be filtered to select
+    specific subsets. It serves as a base class for specialized groups like
+    neuron populations or synaptic connections.
+
+    Attributes
+    ----------
+    size : int
+        Number of elements in the group.
+    filter : torch.Tensor
+        Boolean tensor of shape (size,) indicating which elements are selected.
+        Initially all elements are selected (all True).
+    device : torch.device
+        The GPU device this group is associated with (inherited from GPUNode).
+    """
+
     size: int
     filter: torch.Tensor
 
-    def __init__(self, device:str, size:int):
+    def __init__(self, device: str, size: int):
+        """Initialize a new _Group.
+
+        Parameters
+        ----------
+        device : str
+            String representation of the GPU device (e.g., 'cuda:0').
+        size : int
+            Number of elements in the group.
+        """
         super().__init__(device)
         self.size = size
         self.filter = torch.ones(self.size, dtype=torch.bool, device=self.device)
 
-
     def _clone_with_new_filter(self) -> _Group:
+        """Create a copy of this group with a cloned filter tensor.
+
+        Used internally for filter operations to avoid modifying the original group.
+
+        Returns
+        -------
+        _Group
+            A shallow copy of the group with an independent filter tensor.
+        """
         clone = copy.copy(self)
         clone.filter = clone.filter.clone()
         return clone
 
-
     def where_id(self, condition: Callable[[torch.Tensor], torch.Tensor]) -> _Group:
-        """
-        Aplica un filtro basado en los índices (vectorizado).
-    
-        Args:
-            condition: Función que recibe un tensor de índices y devuelve una máscara booleana.
-    
-        Returns:
-            A sí mismo con el filtro actualizado.
+        """Filter the group based on element indices.
+
+        Applies a vectorized filtering operation based on element indices.
+        The condition function should accept a tensor of indices and return
+        a boolean mask of the same size.
+
+        Parameters
+        ----------
+        condition : Callable[[torch.Tensor], torch.Tensor]
+            Function that takes a tensor of indices and returns a boolean mask.
+
+        Returns
+        -------
+        _Group
+            A new group with the updated filter.
+
+        Raises
+        ------
+        ValueError
+            If the condition function returns a tensor with incorrect shape or type.
+
+        Examples
+        --------
+        >>> # Select even-indexed elements
+        >>> filtered = group.where_id(lambda ids: ids % 2 == 0)
+        >>> # Select the first 10 elements
+        >>> filtered = group.where_id(lambda ids: ids < 10)
         """
         clone = self._clone_with_new_filter()
         idx = torch.arange(clone.size, device=clone.device)
         mask = condition(idx)
         if mask.shape != (clone.size,) or mask.dtype != torch.bool:
-            raise ValueError("La función debe devolver una máscara booleana del mismo tamaño que el grupo.")
+            raise ValueError(
+                "La función debe devolver una máscara booleana del mismo tamaño que el grupo."
+            )
         clone.filter &= mask
         return clone
-        
 
     def reset_filter(self) -> None:
+        """Reset the filter to select all elements.
+
+        After calling this method, all elements in the group will be selected.
+        """
         self.filter.fill_(True)
 
 
 class _SpatialGroup(_Group):
+    """_Group with spatial positions for each element.
+
+    Extends the base _Group class by adding spatial coordinates for each element,
+    enabling filtering based on spatial properties.
+
+    Attributes
+    ----------
+    spatial_dimensions : torch.Tensor
+        Scalar tensor containing the number of spatial dimensions.
+    positions : torch.Tensor
+        Tensor of shape (size, spatial_dimensions) containing the spatial
+        coordinates for each element.
+    """
+
     spatial_dimensions: torch.Tensor
     positions: torch.Tensor
 
+    def __init__(self, device: str, size: int, spatial_dimensions: int = 2):
+        """Initialize a new _SpatialGroup.
 
-    def __init__(self, device:str, size:int, spatial_dimensions:int=2):
-        super().__init__(device, size)
-        self.spatial_dimensions = torch.tensor(spatial_dimensions, dtype=torch.int32, device=self.device)
-        self.positions = torch.randn((self.size, self.spatial_dimensions), device=self.device)
-
-
-    def where_pos(self, condition: Callable[[torch.Tensor], torch.Tensor]) -> _SpatialGroup:
+        Parameters
+        ----------
+        device : str
+            String representation of the GPU device (e.g., 'cuda:0').
+        size : int
+            Number of elements in the group.
+        spatial_dimensions : int, optional
+            Number of spatial dimensions, by default 2.
         """
-        Aplica un filtro basado en las posiciones (vectorizado).
-    
-        Args:
-            condition: Función que toma un tensor de posiciones (n x d) y devuelve una máscara booleana.
-    
-        Returns:
-            A sí mismo con el filtro actualizado.
+        super().__init__(device, size)
+        self.spatial_dimensions = torch.tensor(
+            spatial_dimensions, dtype=torch.int32, device=self.device
+        )
+        self.positions = torch.randn(
+            (self.size, self.spatial_dimensions), device=self.device
+        )
+
+    def where_pos(
+        self, condition: Callable[[torch.Tensor], torch.Tensor]
+    ) -> _SpatialGroup:
+        """Filter the group based on element positions.
+
+        Applies a vectorized filtering operation based on element positions.
+        The condition function should accept a tensor of positions and return
+        a boolean mask of the same size.
+
+        Parameters
+        ----------
+        condition : Callable[[torch.Tensor], torch.Tensor]
+            Function that takes a tensor of positions (shape [size, spatial_dimensions])
+            and returns a boolean mask (shape [size]).
+
+        Returns
+        -------
+        _SpatialGroup
+            A new spatial group with the updated filter.
+
+        Raises
+        ------
+        RuntimeError
+            If the group does not have positions defined.
+        ValueError
+            If the condition function returns a tensor with incorrect shape or type.
+
+        Examples
+        --------
+        >>> # Select elements in the upper half of the space
+        >>> filtered = group.where_pos(lambda pos: pos[:, 1] > 0)
+        >>> # Select elements within a certain radius of the origin
+        >>> filtered = group.where_pos(lambda pos: torch.norm(pos, dim=1) < 1.0)
         """
         clone = self._clone_with_new_filter()
 
         if clone.positions is None:
             raise RuntimeError("Este grupo no tiene posiciones definidas.")
-        
+
         mask = condition(clone.positions)
         if mask.shape != (clone.size,) or mask.dtype != torch.bool:
-            raise ValueError("La función debe devolver una máscara booleana del mismo tamaño que el grupo.")
-        
+            raise ValueError(
+                "La función debe devolver una máscara booleana del mismo tamaño que el grupo."
+            )
+
         clone.filter &= mask
         return clone

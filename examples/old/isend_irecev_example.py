@@ -14,7 +14,7 @@ def setup_logger(rank: int) -> logging.Logger:
     os.makedirs("logs", exist_ok=True)
     logger = logging.getLogger(f"rank{rank}")
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - [Rank %(name)s] %(message)s')
+    formatter = logging.Formatter("%(asctime)s - [Rank %(name)s] %(message)s")
 
     fh = logging.FileHandler(f"logs/log_rank{rank}.txt")
     fh.setFormatter(formatter)
@@ -29,7 +29,9 @@ def bool_to_uint8(x: torch.Tensor) -> torch.Tensor:
     if pad_len:
         x = torch.cat([x, torch.zeros(pad_len, dtype=torch.uint8, device=x.device)])
     x = x.reshape(-1, 8)
-    weights = torch.tensor([1,2,4,8,16,32,64,128], dtype=torch.uint8, device=x.device)
+    weights = torch.tensor(
+        [1, 2, 4, 8, 16, 32, 64, 128], dtype=torch.uint8, device=x.device
+    )
     return (x * weights).sum(dim=1)
 
 
@@ -42,10 +44,26 @@ def define_ring_topology(rank: int, world_size: int) -> list[dict]:
     """Topología en anillo bidireccional con diferentes tamaños por canal"""
     base = 20  # bits base por conexión (puedes cambiar esto)
     return [
-        {"target": (rank + 1) % world_size, "direction": "send", "num_bits": base + rank},
-        {"target": (rank - 1 + world_size) % world_size, "direction": "send", "num_bits": base + rank},
-        {"target": (rank - 1 + world_size) % world_size, "direction": "recv", "num_bits": base + ((rank - 1 + world_size) % world_size)},
-        {"target": (rank + 1) % world_size, "direction": "recv", "num_bits": base + ((rank + 1) % world_size)},
+        {
+            "target": (rank + 1) % world_size,
+            "direction": "send",
+            "num_bits": base + rank,
+        },
+        {
+            "target": (rank - 1 + world_size) % world_size,
+            "direction": "send",
+            "num_bits": base + rank,
+        },
+        {
+            "target": (rank - 1 + world_size) % world_size,
+            "direction": "recv",
+            "num_bits": base + ((rank - 1 + world_size) % world_size),
+        },
+        {
+            "target": (rank + 1) % world_size,
+            "direction": "recv",
+            "num_bits": base + ((rank + 1) % world_size),
+        },
     ]
 
 
@@ -57,13 +75,19 @@ def main():
         local_gpu_count = torch.cuda.device_count()
         world_size = int(os.environ.get("WORLD_SIZE", "1"))
         if world_size > local_gpu_count:
-            raise RuntimeError(f"Se requieren {world_size} GPUs pero solo hay {local_gpu_count}.")
+            raise RuntimeError(
+                f"Se requieren {world_size} GPUs pero solo hay {local_gpu_count}."
+            )
         if local_gpu_count < 2:
-            raise RuntimeError(f"Se requieren al menos 2 GPUs, pero sólo hay {local_gpu_count}.")
+            raise RuntimeError(
+                f"Se requieren al menos 2 GPUs, pero sólo hay {local_gpu_count}."
+            )
 
         # Inicialización distribuida
         if "RANK" in os.environ:
-            dist.init_process_group(backend="nccl") #, init_method="env://") #Se asume que se ha ejecutado el script con `torchrun`
+            dist.init_process_group(
+                backend="nccl"
+            )  # , init_method="env://") #Se asume que se ha ejecutado el script con `torchrun`
             rank = dist.get_rank()
         else:
             raise RuntimeError("Use `torchrun`.")
@@ -91,11 +115,15 @@ def main():
             num_bits = conn["num_bits"]
 
             if direction == "send":
-                bool_data = torch.randint(0, 2, (num_bits,), dtype=torch.bool, device=device)
+                bool_data = torch.randint(
+                    0, 2, (num_bits,), dtype=torch.bool, device=device
+                )
                 packed = bool_to_uint8(bool_data)
                 req = dist.isend(packed.clone(), dst=tgt)
                 send_reqs.append(req)
-                logger.info(f"Enviando {num_bits} bits a rank {tgt}: {bool_data.to(torch.uint8)}")
+                logger.info(
+                    f"Enviando {num_bits} bits a rank {tgt}: {bool_data.to(torch.uint8)}"
+                )
 
             elif direction == "recv":
                 padded_len = (num_bits + 7) // 8  # número de bytes
@@ -106,7 +134,9 @@ def main():
         for src, (buf, req, nbits) in recv_results.items():
             req.wait()
             result = uint8_to_bool(buf, nbits)
-            logger.info(f"Recibido {nbits} bits de rank {src}: {result.to(torch.uint8)}")
+            logger.info(
+                f"Recibido {nbits} bits de rank {src}: {result.to(torch.uint8)}"
+            )
 
         for req in send_reqs:
             req.wait()

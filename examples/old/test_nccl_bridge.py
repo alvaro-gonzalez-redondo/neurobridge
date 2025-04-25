@@ -12,7 +12,9 @@ def test_axonal_bridge_nccl():
     n_steps = world_size
     device = torch.device(f"cuda:{rank}")
 
-    bridge = AxonalBridge(size=size, n_steps=n_steps, rank=rank, world_size=world_size, device=device)
+    bridge = AxonalBridge(
+        size=size, n_steps=n_steps, rank=rank, world_size=world_size, device=device
+    )
 
     # Spike único por rank, en una posición única
     spike = torch.zeros(size, dtype=torch.uint8, device=device)
@@ -32,10 +34,14 @@ def test_axonal_bridge_nccl():
 
     if rank != 0:
         total = r_cpu.sum().item()
-        assert total == world_size, f"[Rank {rank}] ERROR: se esperaban {world_size} spikes, se recibieron {total}"
+        assert (
+            total == world_size
+        ), f"[Rank {rank}] ERROR: se esperaban {world_size} spikes, se recibieron {total}"
         for i in range(world_size):
             expected = 3 + i * 2
-            assert r_cpu[expected] == 1, f"[Rank {rank}] ERROR: falta spike de {i} en índice {expected}"
+            assert (
+                r_cpu[expected] == 1
+            ), f"[Rank {rank}] ERROR: falta spike de {i} en índice {expected}"
         print(f"[Rank {rank}] ✅ Comunicación múltiple correcta en CUDA.")
 
 

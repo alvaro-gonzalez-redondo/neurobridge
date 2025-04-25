@@ -11,7 +11,7 @@ class MyEngine(SimulatorEngine):
             popB = IandF(size=12, delay=5)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     engine = MyEngine(n_gpus=-1)
     for _ in range(10):
         engine.step()

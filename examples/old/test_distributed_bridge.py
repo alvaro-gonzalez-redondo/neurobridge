@@ -12,7 +12,9 @@ def test_axonal_bridge_all_ranks():
     n_steps = world_size
     device = torch.device("cpu")
 
-    bridge = AxonalBridge(size=size, n_steps=n_steps, rank=rank, world_size=world_size, device="cpu")
+    bridge = AxonalBridge(
+        size=size, n_steps=n_steps, rank=rank, world_size=world_size, device="cpu"
+    )
 
     # Cada rank dispara su spike único en una neurona diferente
     spike = torch.zeros(size, dtype=torch.uint8)
@@ -32,10 +34,14 @@ def test_axonal_bridge_all_ranks():
     # Validar: deben haberse recibido todos los spikes
     if rank != 0:
         print(f"[Rank {rank}] recibió:\n{received}")
-        assert total_spikes == world_size, f"[Rank {rank}] ❌ ERROR: se esperaban {world_size} spikes, se recibieron {total_spikes}"
+        assert (
+            total_spikes == world_size
+        ), f"[Rank {rank}] ❌ ERROR: se esperaban {world_size} spikes, se recibieron {total_spikes}"
         for i in range(world_size):
             expected_idx = 3 + i * 2
-            assert received[expected_idx] == 1, f"[Rank {rank}] ❌ ERROR: falta spike de rank {i} en índice {expected_idx}"
+            assert (
+                received[expected_idx] == 1
+            ), f"[Rank {rank}] ❌ ERROR: falta spike de rank {i} en índice {expected_idx}"
         print(f"[Rank {rank}] ✅ Comunicación múltiple correcta.")
 
 

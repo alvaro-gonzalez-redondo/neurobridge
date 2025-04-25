@@ -19,7 +19,9 @@ def pack_spikes(spikes: torch.Tensor) -> torch.Tensor:
     pad = padded_len - size
 
     if pad > 0:
-        spikes = torch.cat([spikes, torch.zeros((n_steps, pad), dtype=torch.uint8)], dim=1)
+        spikes = torch.cat(
+            [spikes, torch.zeros((n_steps, pad), dtype=torch.uint8)], dim=1
+        )
 
     reshaped = spikes.view(n_steps, -1, 8)
     powers = torch.tensor([1, 2, 4, 8, 16, 32, 64, 128], dtype=torch.uint8)
@@ -28,9 +30,12 @@ def pack_spikes(spikes: torch.Tensor) -> torch.Tensor:
 
 def unpack_spikes(packed: torch.Tensor, size: int) -> torch.Tensor:
     n_steps, n_packed = packed.shape
-    unpacked = packed.unsqueeze(-1).bitwise_and(
-        torch.tensor([1, 2, 4, 8, 16, 32, 64, 128], dtype=torch.uint8)
-    ).ne(0).to(torch.uint8)
+    unpacked = (
+        packed.unsqueeze(-1)
+        .bitwise_and(torch.tensor([1, 2, 4, 8, 16, 32, 64, 128], dtype=torch.uint8))
+        .ne(0)
+        .to(torch.uint8)
+    )
     return unpacked.view(n_steps, -1)[:, :size]
 
 
@@ -41,8 +46,8 @@ def main():
     world_size = dist.get_world_size()
     torch.manual_seed(rank)
 
-    size = 64           # número de neuronas
-    n_steps = 2         # pasos de tiempo
+    size = 64  # número de neuronas
+    n_steps = 2  # pasos de tiempo
     n_packed = (size + 7) // 8
     buffer_shape = (n_steps, size)
     flat_shape = (n_steps * n_packed,)
@@ -52,7 +57,7 @@ def main():
     if rank == 0:
         local_spikes[0, 3] = 1  # El spike a enviar
     else:
-        local_spikes[:] = 0     # Vacío
+        local_spikes[:] = 0  # Vacío
 
     # Empaquetar en Rank 0
     flat_packed = torch.zeros(flat_shape, dtype=torch.uint8)
@@ -60,7 +65,9 @@ def main():
         packed = pack_spikes(local_spikes).to(torch.uint8)
         flat_packed.copy_(packed.flatten().contiguous())
     # Difundir el tensor plano desde Rank 0 a todos
-    print(f"[Rank {rank}] flat_packed.shape = {flat_packed.shape}, dtype = {flat_packed.dtype}")
+    print(
+        f"[Rank {rank}] flat_packed.shape = {flat_packed.shape}, dtype = {flat_packed.dtype}"
+    )
     dist.broadcast(flat_packed, src=0)
 
     # Desempaquetar
