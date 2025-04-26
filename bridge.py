@@ -181,24 +181,24 @@ class _BridgeNeuronGroup(NeuronGroup):
         phase = t % self.n_bridge_steps
 
         if is_distributed():
-            # --- al final del bloque: empaquetar, limpiar y lanzar gather asíncrono ---
+            # --- At the end of the block (n_bridge_steps-1): pack, clean, and launch async gather ---
             if phase == self.n_bridge_steps - 1:
-                # 1) Aplana y empaqueta
+                # 1) Flatten and pack
                 write_buffer_flat = self._write_buffer.flatten()
                 packed = self._bool_to_uint8(write_buffer_flat)
 
-                # 2) Limpia para el siguiente bloque
+                # 2) Clean for the next block
                 self._write_buffer.fill_(False)
 
-                # 3) Gather asíncrono
+                # 3) Async Gather
                 self._comm_req = dist.all_gather(self._gathered, packed, async_op=True)
 
-            # --- al inicio del bloque siguiente: esperar, reconstruir y volcar al buffer ---
+            # --- At the beginning of next block: wait, rebuild and load to the buffer ---
             elif phase == 0 and getattr(self, "_comm_req", None) is not None:
-                # 4) Espera a que termine el gather
+                # 4) Wait the gather to finish
                 self._comm_req.wait()
 
-                # 5) Reconstruye el tensor [n_total_neurons x n_bridge_steps]
+                # 5) Rebuild the tensor [n_total_neurons x n_bridge_steps]
                 bool_list = []
                 for p in self._gathered:
                     unpacked = self._uint8_to_bool(p, self.n_bits)
@@ -206,15 +206,15 @@ class _BridgeNeuronGroup(NeuronGroup):
                     bool_list.append(reshaped)
                 result = torch.cat(bool_list, dim=0)
 
-                # 6) Programa esos spikes en el futuro
+                # 6) Set the spikes in the future
                 time_indices = (t + self._time_range + 1) % self.delay_max
                 self._spike_buffer.index_copy_(1, time_indices, result)
 
-                # 7) Limpia el handle para el próximo bloque
+                # 7) Clean handle for the next block
                 self._comm_req = None
 
         else:
-            # Modo no distribuido (igual que antes)
+            # Non-distributed mode (just load to the buffer)
             if phase == self.n_bridge_steps - 1:
                 time_indices = (t + 1 + self._time_range) % self.delay_max
                 self._spike_buffer.index_copy_(1, time_indices, self._write_buffer)
@@ -270,7 +270,6 @@ class _BridgeNeuronGroup(NeuronGroup):
         torch.Tensor
             Packed uint8 tensor.
         """
-        # Aplanar el tensor primero
         x_flat = x.flatten().to(torch.uint8)
         pad_len = (8 - x_flat.numel() % 8) % 8
         if pad_len:
@@ -295,7 +294,6 @@ class _BridgeNeuronGroup(NeuronGroup):
         torch.Tensor
             Unpacked boolean tensor.
         """
-        # Asegurar que x sea un tensor 1D
         x = x.flatten()
         bits = ((x.unsqueeze(1) >> torch.arange(8, device=x.device)) & 1).to(torch.bool)
         return bits.flatten()[:num_bits]

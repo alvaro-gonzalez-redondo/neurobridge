@@ -218,11 +218,11 @@ class SimulatorEngine(Node):
 
         globals.engine = self
 
-        # Seguridad: Verificar GPUs disponibles
-        if not torch.cuda.is_available():  ## ¿Tenemos CUDA?
+        # Safety checks: Available GPUs
+        if not torch.cuda.is_available():  ## Do we have CUDA?
             raise RuntimeError("CUDA is not available.")
 
-        self.n_gpus = torch.cuda.device_count()  ## ¿Número de GPUs?
+        self.n_gpus = torch.cuda.device_count()  ## Number of GPUs?
         if "WORLD_SIZE" in os.environ:
             self.world_size = int(os.environ["WORLD_SIZE"])
             if self.world_size > self.n_gpus:
@@ -232,14 +232,14 @@ class SimulatorEngine(Node):
         else:
             self.world_size = 1
 
-        # Inicialización del circuito local
+        # Initializing local circuit
         if "RANK" in os.environ:
             dist.init_process_group(
                 backend="nccl"
-            )  # , init_method="env://") #Asumimos siempre que se ejecutará con `torchrun`
+            )  # , init_method="env://") #We assume user will always use `torchrun`
             self.rank = dist.get_rank()
         else:
-            self.rank = 0  # Modo no distribuido
+            self.rank = 0  # Non-distributed mode
 
         device = torch.device(f"cuda:{self.rank % self.n_gpus}")
         torch.cuda.set_device(device)
@@ -250,10 +250,10 @@ class SimulatorEngine(Node):
         # Logger
         globals.logger = _setup_logger(self.rank)
 
-        # Reproducibilidad
+        # Reproducibility
         self.set_random_seeds(42 + self.rank)
 
-        # Creamos el modelo personalizado del usuario
+        # Creates the custom user model
         log("#################################################################")
         log("Neurobridge initialized. Building user network...")
         self.build_user_network(self.rank, self.world_size)

@@ -65,7 +65,7 @@ class _ParentStack(contextlib.AbstractContextManager):
             Always returns False, meaning any exceptions will be propagated.
         """
         self._stack_var.reset(self._token)
-        return False  # no suprime excepciones
+        return False  # do not supress exceptions
 
     @staticmethod
     def current_parent() -> Optional[Node]:

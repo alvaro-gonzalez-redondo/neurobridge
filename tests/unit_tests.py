@@ -1,6 +1,5 @@
 import unittest
 import torch
-import numpy as np
 
 from neurobridge import *
 from neurobridge.core import _ParentStack

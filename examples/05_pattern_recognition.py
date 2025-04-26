@@ -67,8 +67,8 @@ class PatternRecognitionExample(SimulatorEngine):
                 synapse_class=StaticSynapse,
                 weight=lambda pre, post: torch.where(
                     pre.unsqueeze(1) == post.unsqueeze(0),  # Diagonal mask
-                    torch.zeros(len(pre) * len(post), device=self.device),
-                    torch.ones(len(pre) * len(post), device=self.device) * -0.5,
+                    torch.zeros(len(pre) * len(post), device=self.local_circuit.device),
+                    torch.ones(len(pre) * len(post), device=self.local_circuit.device) * -0.5,
                 ),
                 delay=1,
             )

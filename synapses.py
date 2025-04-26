@@ -123,7 +123,7 @@ class _ConnectionOperator:
         self.pattern = pattern
         self.kwargs = kwargs
 
-        # Generar subconjuntos filtrados (o completos)
+        # Filtered subsets
         valid_pre = self.pre.filter.nonzero(as_tuple=True)[0]
         valid_pos = self.pos.filter.nonzero(as_tuple=True)[0]
 
@@ -142,7 +142,7 @@ class _ConnectionOperator:
                 )
             except KeyError:
                 raise RuntimeError(
-                    "Faltan 'idx_pre' o 'idx_pos' en los parámetros para el patrón 'specific'."
+                    "`specific`pattern requires both 'idx_pre' and 'idx_pos' parameters."
                 )
 
         elif pattern == "one-to-one":
@@ -152,10 +152,10 @@ class _ConnectionOperator:
 
         else:
             raise NotImplementedError(
-                f"Patrón de conexión '{pattern}' no implementado."
+                f"Connection pattern '{pattern}' is not implemented."
             )
 
-        # Parámetros comunes a todas las sinapsis
+        # Shared parameters for all synapses
         delay = self._compute_parameter(
             kwargs.get("delay", 0), source_indices, target_indices
         ).to(torch.long)
@@ -197,7 +197,7 @@ class _ConnectionOperator:
 
         else:
             raise NotImplementedError(
-                f"Clase de sinapsis '{synapse_class}' no soportada."
+                f"Synaptic class '{synapse_class}' not supported."
             )
 
         # Limpiar filtros tras conectar
@@ -241,10 +241,10 @@ class _ConnectionOperator:
         if callable(param):
             values = param(idx_pre, idx_post)
             if not isinstance(values, torch.Tensor):
-                raise TypeError("Las funciones deben devolver un tensor.")
+                raise TypeError("Functions must return a tensor.")
             if values.shape[0] != n:
                 raise ValueError(
-                    f"El tensor devuelto debe tener tamaño {n}, pero tiene {values.shape[0]}."
+                    f"Returned tensor must have size {n}, but it has size {values.shape[0]}."
                 )
             return values.to(device=self.device)
 
@@ -261,7 +261,7 @@ class _ConnectionOperator:
             param = torch.tensor(param, device=self.device)
             return self._compute_parameter(param, idx_pre, idx_post)
 
-        else:  # Escalar
+        else:  # Scalar
             return torch.full((n,), float(param), device=self.device)
 
 
@@ -525,7 +525,8 @@ class STDPSynapse(SynapticGroup):
             if isinstance(weight, (int, float))
             else weight.to(device=self.device)
         )
-        # Optimization attempts to reduce cache misses
+        # TODO: Failed optimization attempts to reduce cache misses, remove if
+        #       further testing fails.
         # sorted_indices = torch.argsort(self.idx_pre)
         # self.idx_pre = self.idx_pre[sorted_indices]
         # self.idx_pos = self.idx_pos[sorted_indices]
@@ -559,19 +560,19 @@ class STDPSynapse(SynapticGroup):
         self.x_pre *= self.alpha_pre
         self.x_pos *= self.alpha_pos
 
-        # Spikes relevantes con los delays correctos
+        # Selecting relevant spikes with the right delays
         pre_spikes = self.pre.get_spikes_at(self.delay, self.idx_pre)
         pos_spikes = self.pos.get_spikes_at(self._delay_1, self.idx_pos)
 
-        # Actualización de trazas
+        # Updating traces
         self.x_pre += pre_spikes.to(torch.float32)
         self.x_pos += pos_spikes.to(torch.float32)
 
-        # STDP - pre dispara antes que post
+        # STDP - pre before post
         dw = self.A_plus * self.x_pos * pre_spikes
         self.weight += dw
 
-        # STDP - post dispara después que pre
+        # STDP - post before pre
         dw = self.A_minus * self.x_pre * pos_spikes
         self.weight += dw
 

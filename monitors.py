@@ -32,7 +32,7 @@ class SpikeMonitor(Node):
     filters: List[torch.Tensor]
     recorded_spikes: List[
         List[torch.Tensor]
-    ]  # Por grupo: lista de tensores [N_spikes, 2] (neuron_idx, t)
+    ]  # Per group: list of tensors [N_spikes, 2] (neuron_idx, t)
 
     def __init__(self, groups: List[NeuronGroup]):
         """Initialize a spike monitor for the given neuron groups.
@@ -142,7 +142,7 @@ class VariableMonitor(Node):
         self.filters = [group.filter.nonzero(as_tuple=True)[0] for group in groups]
         self.variable_names = variable_names
 
-        # recorded_values[i][var] = lista de tensores por tiempo
+        # recorded_values[i][var] = list of tensors over time
         self.recorded_values = [
             {var_name: [] for var_name in variable_names} for _ in groups
         ]
@@ -174,7 +174,7 @@ class VariableMonitor(Node):
                         f"Monitored variable '{var_name}' is not a torch.Tensor."
                     )
 
-                # Copiar para evitar aliasing
+                # Copy to avoid aliasing
                 self.recorded_values[i][var_name].append(value[filter].detach().clone())
 
     def get_variable_tensor(
