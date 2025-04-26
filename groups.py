@@ -8,10 +8,10 @@ import copy
 import torch
 
 
-class _Group(GPUNode):
+class Group(GPUNode):
     """Base class for groups of elements with filtering capabilities.
 
-    A _Group represents a collection of elements that can be filtered to select
+    A Group represents a collection of elements that can be filtered to select
     specific subsets. It serves as a base class for specialized groups like
     neuron populations or synaptic connections.
 
@@ -30,7 +30,7 @@ class _Group(GPUNode):
     filter: torch.Tensor
 
     def __init__(self, device: str, size: int):
-        """Initialize a new _Group.
+        """Initialize a new Group.
 
         Parameters
         ----------
@@ -43,21 +43,21 @@ class _Group(GPUNode):
         self.size = size
         self.filter = torch.ones(self.size, dtype=torch.bool, device=self.device)
 
-    def _clone_with_new_filter(self) -> _Group:
+    def _clone_with_new_filter(self) -> Group:
         """Create a copy of this group with a cloned filter tensor.
 
         Used internally for filter operations to avoid modifying the original group.
 
         Returns
         -------
-        _Group
+        Group
             A shallow copy of the group with an independent filter tensor.
         """
         clone = copy.copy(self)
         clone.filter = clone.filter.clone()
         return clone
 
-    def where_id(self, condition: Callable[[torch.Tensor], torch.Tensor]) -> _Group:
+    def where_id(self, condition: Callable[[torch.Tensor], torch.Tensor]) -> Group:
         """Filter the group based on element indices.
 
         Applies a vectorized filtering operation based on element indices.
@@ -71,7 +71,7 @@ class _Group(GPUNode):
 
         Returns
         -------
-        _Group
+        Group
             A new group with the updated filter.
 
         Raises
@@ -91,7 +91,7 @@ class _Group(GPUNode):
         mask = condition(idx)
         if mask.shape != (clone.size,) or mask.dtype != torch.bool:
             raise ValueError(
-                "La función debe devolver una máscara booleana del mismo tamaño que el grupo."
+                "Function must return a boolean mask of the same size of the group."
             )
         clone.filter &= mask
         return clone
@@ -104,10 +104,10 @@ class _Group(GPUNode):
         self.filter.fill_(True)
 
 
-class _SpatialGroup(_Group):
-    """_Group with spatial positions for each element.
+class SpatialGroup(Group):
+    """Group with spatial positions for each element.
 
-    Extends the base _Group class by adding spatial coordinates for each element,
+    Extends the base Group class by adding spatial coordinates for each element,
     enabling filtering based on spatial properties.
 
     Attributes
@@ -123,7 +123,7 @@ class _SpatialGroup(_Group):
     positions: torch.Tensor
 
     def __init__(self, device: str, size: int, spatial_dimensions: int = 2):
-        """Initialize a new _SpatialGroup.
+        """Initialize a new SpatialGroup.
 
         Parameters
         ----------
@@ -144,7 +144,7 @@ class _SpatialGroup(_Group):
 
     def where_pos(
         self, condition: Callable[[torch.Tensor], torch.Tensor]
-    ) -> _SpatialGroup:
+    ) -> SpatialGroup:
         """Filter the group based on element positions.
 
         Applies a vectorized filtering operation based on element positions.
@@ -159,7 +159,7 @@ class _SpatialGroup(_Group):
 
         Returns
         -------
-        _SpatialGroup
+        SpatialGroup
             A new spatial group with the updated filter.
 
         Raises

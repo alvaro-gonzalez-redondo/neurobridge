@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from . import globals
-from .core import Node, GPUNode, _ParentStack
-from .bridge import _BridgeNeuronGroup
+from .core import Node, GPUNode, ParentStack
+from .bridge import BridgeNeuronGroup
 from .utils import _setup_logger, log, is_distributed
 
 from typing import Optional
@@ -15,7 +15,7 @@ import numpy as np
 import random
 
 
-class _CUDAGraphSubTree(GPUNode):
+class CUDAGraphSubTree(GPUNode):
     """A subtree of nodes that will be captured in a CUDA graph.
 
     This is a specialized node for organizing computation that will be
@@ -26,7 +26,7 @@ class _CUDAGraphSubTree(GPUNode):
     pass
 
 
-class _LocalCircuit(GPUNode):
+class LocalCircuit(GPUNode):
     """Container for all neural components on a single GPU.
 
     The LocalCircuit represents the complete neural circuit running on one GPU.
@@ -48,11 +48,11 @@ class _LocalCircuit(GPUNode):
 
     t: torch.Tensor
 
-    graph_root: _CUDAGraphSubTree
+    graph_root: CUDAGraphSubTree
     graph: torch.cuda.CUDAGraph
     graph_stream: torch.cuda.Stream
 
-    bridge: Optional[_BridgeNeuronGroup]
+    bridge: Optional[BridgeNeuronGroup]
 
     def __init__(self, device):
         """Initialize a local circuit on the specified device.
@@ -64,7 +64,7 @@ class _LocalCircuit(GPUNode):
         """
         super().__init__(device)
         self.t = torch.zeros(1, dtype=torch.long, device=device)
-        self.graph_root = _CUDAGraphSubTree(device=device)
+        self.graph_root = CUDAGraphSubTree(device=device)
         self.graph = torch.cuda.CUDAGraph()
         self.graph_stream = torch.cuda.Stream()
         self.bridge = None
@@ -130,7 +130,7 @@ class SimulatorEngine(Node):
     n_gpus: int
     world_size: int
     rank: int
-    local_circuit: _LocalCircuit
+    local_circuit: LocalCircuit
 
     def __enter__(self):
         """Context manager entry point.
@@ -163,7 +163,7 @@ class SimulatorEngine(Node):
         if is_distributed():
             dist.destroy_process_group()
 
-    def autoparent(self, mode: str = "normal") -> _ParentStack:
+    def autoparent(self, mode: str = "normal") -> ParentStack:
         """Create a ParentStack context with the appropriate parent node.
 
         Parameters
@@ -200,7 +200,7 @@ class SimulatorEngine(Node):
             target = self.local_circuit
         else:
             raise RuntimeError(f"Invalid autoparent mode: {mode}.")
-        return _ParentStack(target)
+        return ParentStack(target)
 
     def __init__(self):
         """Initialize the simulator engine.
@@ -244,7 +244,7 @@ class SimulatorEngine(Node):
         device = torch.device(f"cuda:{self.rank % self.n_gpus}")
         torch.cuda.set_device(device)
 
-        self.local_circuit = _LocalCircuit(device)
+        self.local_circuit = LocalCircuit(device)
         self.add_child(self.local_circuit)
 
         # Logger
@@ -322,7 +322,7 @@ class SimulatorEngine(Node):
         n_steps : int
             Number of time steps to collect before synchronizing.
         """
-        bridge = _BridgeNeuronGroup(
+        bridge = BridgeNeuronGroup(
             device=self.local_circuit.device,
             rank=self.rank,
             world_size=self.world_size,

@@ -10,7 +10,7 @@ import torch
 import torch.distributed as dist
 
 
-class _BridgeNeuronGroup(NeuronGroup):
+class BridgeNeuronGroup(NeuronGroup):
     """Bridge for inter-GPU communication of spikes.
 
     This specialized neuron group enables communication of spikes between
@@ -220,7 +220,7 @@ class _BridgeNeuronGroup(NeuronGroup):
                 self._spike_buffer.index_copy_(1, time_indices, self._write_buffer)
                 self._write_buffer.fill_(False)
 
-    def where_rank(self, rank: int) -> _BridgeNeuronGroup:
+    def where_rank(self, rank: int) -> BridgeNeuronGroup:
         """Filter the bridge group to select neurons from a specific GPU.
 
         Parameters

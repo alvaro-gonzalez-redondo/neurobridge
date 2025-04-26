@@ -4,14 +4,14 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .neurons import NeuronGroup
-from .groups import _Group
+from .groups import Group
 
 from typing import Optional, Any, Type, Union
 
 import torch
 
 
-class _ConnectionOperator:
+class ConnectionOperator:
     """Handles the creation of synaptic connections between neuron groups.
 
     This class is created when using the >> operator between neuron groups
@@ -265,7 +265,7 @@ class _ConnectionOperator:
             return torch.full((n,), float(param), device=self.device)
 
 
-class SynapticGroup(_Group):
+class SynapticGroup(Group):
     """Base class for groups of synaptic connections.
 
     Represents a collection of synaptic connections between pre-synaptic and

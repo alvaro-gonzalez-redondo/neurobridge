@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from . import globals
 from .core import Node
-from .groups import _Group
+from .groups import Group
 from .neurons import NeuronGroup
 
 from typing import List, Dict
@@ -120,14 +120,14 @@ class VariableMonitor(Node):
         Nested structure of recorded values, organized by group and variable.
     """
 
-    groups: List[_Group]
+    groups: List[Group]
     filters: List[torch.Tensor]
     variable_names: List[str]
     recorded_values: List[
         Dict[str, List[torch.Tensor]]
     ]  # [group_idx][var_name] = list of tensors over time
 
-    def __init__(self, groups: List[_Group], variable_names: List[str]):
+    def __init__(self, groups: List[Group], variable_names: List[str]):
         """Initialize a variable monitor for the given groups and variables.
 
         Parameters

@@ -2,10 +2,10 @@ import unittest
 import torch
 
 from neurobridge import *
-from neurobridge.core import _ParentStack
-from neurobridge.groups import _Group, _SpatialGroup
-from neurobridge.engine import _LocalCircuit
-from neurobridge.synapses import _ConnectionOperator
+from neurobridge.core import ParentStack
+from neurobridge.groups import Group, SpatialGroup
+from neurobridge.engine import LocalCircuit
+from neurobridge.synapses import ConnectionOperator
 
 
 class TestCore(unittest.TestCase):
@@ -39,7 +39,7 @@ class TestCore(unittest.TestCase):
         """Test the ParentStack context manager."""
         parent = Node()
 
-        with _ParentStack(parent):
+        with ParentStack(parent):
             child = Node()
 
         self.assertIn(child, parent.children)
@@ -47,10 +47,10 @@ class TestCore(unittest.TestCase):
 
         # Test nested parent stack
         outer_parent = Node()
-        with _ParentStack(outer_parent):
+        with ParentStack(outer_parent):
             middle_child = Node()
 
-            with _ParentStack(middle_child):
+            with ParentStack(middle_child):
                 inner_child = Node()
 
         self.assertIn(middle_child, outer_parent.children)
@@ -99,7 +99,7 @@ class TestGroup(unittest.TestCase):
     def test_group_creation(self):
         """Test Group initialization."""
         size = 100
-        group = _Group(self.device, size)
+        group = Group(self.device, size)
 
         self.assertEqual(group.size, size)
         self.assertEqual(group.filter.shape, (size,))
@@ -111,7 +111,7 @@ class TestGroup(unittest.TestCase):
     def test_filter_operations(self):
         """Test filtering operations on Group."""
         size = 100
-        group = _Group(self.device, size)
+        group = Group(self.device, size)
 
         # Filter even indices
         filtered = group.where_id(lambda ids: ids % 2 == 0)
@@ -138,7 +138,7 @@ class TestGroup(unittest.TestCase):
         """Test SpatialGroup initialization and operations."""
         size = 100
         spatial_dims = 3
-        group = _SpatialGroup(self.device, size, spatial_dims)
+        group = SpatialGroup(self.device, size, spatial_dims)
 
         self.assertEqual(group.spatial_dimensions.item(), spatial_dims)
         self.assertEqual(group.positions.shape, (size, spatial_dims))
@@ -204,7 +204,7 @@ class TestNeurons(unittest.TestCase):
         # Create an engine instance but don't fully initialize
         # We just need the time variable
         SimulatorEngine.engine = DummyEngine()
-        SimulatorEngine.engine.local_circuit = _LocalCircuit(self.device)
+        SimulatorEngine.engine.local_circuit = LocalCircuit(self.device)
         SimulatorEngine.engine.local_circuit.t = torch.zeros(
             1, dtype=torch.long, device=self.device
         )
@@ -251,7 +251,7 @@ class TestNeurons(unittest.TestCase):
         # Create an engine instance but don't fully initialize
         # We just need the time variable
         SimulatorEngine.engine = DummyEngine()
-        SimulatorEngine.engine.local_circuit = _LocalCircuit(self.device)
+        SimulatorEngine.engine.local_circuit = LocalCircuit(self.device)
         SimulatorEngine.engine.local_circuit.t = torch.zeros(
             1, dtype=torch.long, device=self.device
         )
@@ -302,7 +302,7 @@ class TestSynapses(unittest.TestCase):
         # Create an engine instance but don't fully initialize
         # We just need the time variable
         SimulatorEngine.engine = DummyEngine()
-        SimulatorEngine.engine.local_circuit = _LocalCircuit(self.device)
+        SimulatorEngine.engine.local_circuit = LocalCircuit(self.device)
         SimulatorEngine.engine.local_circuit.t = torch.zeros(
             1, dtype=torch.long, device=self.device
         )
@@ -315,7 +315,7 @@ class TestSynapses(unittest.TestCase):
         """Test the ConnectionOperator class and >> operator."""
         conn_op = self.source >> self.target
 
-        self.assertIsInstance(conn_op, _ConnectionOperator)
+        self.assertIsInstance(conn_op, ConnectionOperator)
         self.assertIs(conn_op.pre, self.source)
         self.assertIs(conn_op.pos, self.target)
 

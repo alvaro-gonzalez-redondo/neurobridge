@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from . import globals
-from .groups import _SpatialGroup
-from .synapses import _ConnectionOperator
+from .groups import SpatialGroup
+from .synapses import ConnectionOperator
 
 import torch
 
 
-class NeuronGroup(_SpatialGroup):
+class NeuronGroup(SpatialGroup):
     """Base class for groups of neurons with spike propagation capabilities.
 
     Extends _SpatialGroup to provide basic functionality for handling spikes,
@@ -144,7 +144,7 @@ class NeuronGroup(_SpatialGroup):
         t_indices = (globals.engine.local_circuit.t - delays) % self.delay_max
         return self._spike_buffer[indices, t_indices]
 
-    def __rshift__(self, other) -> _ConnectionOperator:
+    def __rshift__(self, other) -> ConnectionOperator:
         """Implement the >> operator for creating connections between neuron groups.
 
         This operator provides a concise syntax for defining connections:
@@ -165,7 +165,7 @@ class NeuronGroup(_SpatialGroup):
         >>> # Create all-to-all connections with weight 0.1
         >>> (source_group >> target_group)(pattern='all-to-all', weight=0.1)
         """
-        return _ConnectionOperator(self, other)
+        return ConnectionOperator(self, other)
 
 
 class ParrotNeurons(NeuronGroup):

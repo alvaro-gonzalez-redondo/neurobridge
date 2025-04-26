@@ -8,7 +8,7 @@ import contextvars
 import torch
 
 
-class _ParentStack(contextlib.AbstractContextManager):
+class ParentStack(contextlib.AbstractContextManager):
     """Context manager that tracks the current parent node in a hierarchical structure.
 
     This class manages a stack of parent nodes during the construction of a node
@@ -76,7 +76,7 @@ class _ParentStack(contextlib.AbstractContextManager):
         _Node or None
             The current parent node, or None if the stack is empty.
         """
-        stack = _ParentStack._stack_var.get()
+        stack = ParentStack._stack_var.get()
         return stack[-1] if stack else None
 
 
@@ -111,7 +111,7 @@ class Node:
         self.children = []
         self.parent = None
 
-        parent = _ParentStack.current_parent()
+        parent = ParentStack.current_parent()
         if parent is not None:
             parent.add_child(self)
 

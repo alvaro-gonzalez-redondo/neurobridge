@@ -58,7 +58,7 @@ MATPLOTLIB_RGB = [
 RESET = "\033[0m"
 
 
-class _RankColorFormatter(logging.Formatter):
+class RankColorFormatter(logging.Formatter):
     """A logging formatter that colors messages based on the rank.
 
     This formatter adds ANSI color codes to log messages, with the color
@@ -131,7 +131,7 @@ def _setup_logger(rank: int) -> logging.Logger:
     logger.addHandler(fh)
 
     # Output to console (color according to rank)
-    console_formatter = _RankColorFormatter(rank, fmt)
+    console_formatter = RankColorFormatter(rank, fmt)
     ch = logging.StreamHandler()
     ch.setFormatter(console_formatter)
     logger.addHandler(ch)
