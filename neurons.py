@@ -111,6 +111,18 @@ class NeuronGroup(SpatialGroup):
         assert spikes.shape[0] == self.size
         self._input_spikes |= spikes.bool()
 
+    def get_spikes(self) -> torch.Tensor:
+        """Get the current spikes.
+
+        Returns
+        -------
+        torch.Tensor
+            Boolean tensor of shape (M,) with the spike status for each neuron.
+
+        """
+        t_indices = (globals.engine.local_circuit.t - 1) % self.delay_max
+        return self._spike_buffer[:, t_indices].squeeze_(1)
+    
     def get_spikes_at(
         self, delays: torch.Tensor, indices: torch.Tensor
     ) -> torch.Tensor:

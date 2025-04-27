@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 class STDPExample(SimulatorEngine):
     """Simulation demonstrating STDP learning."""
+    use_dense_connections = True
 
     def build_user_network(self, rank: int, world_size: int):
         """Build a network with STDP synapses for learning.
@@ -27,7 +28,7 @@ class STDPExample(SimulatorEngine):
             Total number of GPUs (ignored in this single-GPU example).
         """
         # Set up parameters
-        n_input = 100  # Number of input neurons
+        n_input = 1_000  # Number of input neurons
         n_output = 1  # Number of output neurons
 
         # Setup for STDP demonstration - we'll create input patterns that
@@ -49,18 +50,32 @@ class STDPExample(SimulatorEngine):
             )
 
             # Connect with STDP synapses - initially weak random weights
-            self.synapses = (self.input_neurons >> self.output_neuron)(
-                pattern="all-to-all",
-                synapse_class=STDPConnection,
-                weight=0.01,  # Initial weight
-                delay=1,  # 1ms delay
-                A_plus=0.01,  # Potentiation rate
-                A_minus=0.0105,  # Depression rate (slightly stronger)
-                tau_plus=20.0,  # Potentiation time constant
-                tau_minus=20.0,  # Depression time constant
-                w_min=0.0,  # Minimum weight
-                w_max=0.5,  # Maximum weight
-            )
+            if self.use_dense_connections:
+                self.synapses = (self.input_neurons >> self.output_neuron)(
+                    pattern="all-to-all",
+                    synapse_class=STDPDenseConnection,
+                    weight=torch.full((n_input, n_output), 0.01),  # Initial weight
+                    delay=1,
+                    A_plus=0.01,  # Potentiation rate
+                    A_minus=0.0105,  # Depression rate (slightly stronger)
+                    tau_plus=20.0,  # Potentiation time constant
+                    tau_minus=20.0,  # Depression time constant
+                    w_min=0.0,  # Minimum weight
+                    w_max=0.5,  # Maximum weight
+                )
+            else:
+                self.synapses = (self.input_neurons >> self.output_neuron)(
+                    pattern="all-to-all",
+                    synapse_class=STDPConnection,
+                    weight=0.01,  # Initial weight
+                    delay=1,  # 1ms delay
+                    A_plus=0.01,  # Potentiation rate
+                    A_minus=0.0105,  # Depression rate (slightly stronger)
+                    tau_plus=20.0,  # Potentiation time constant
+                    tau_minus=20.0,  # Depression time constant
+                    w_min=0.0,  # Minimum weight
+                    w_max=0.5,  # Maximum weight
+                )
 
         with self.autoparent("normal"):
             # Monitor spikes
@@ -74,10 +89,16 @@ class STDPExample(SimulatorEngine):
             )
 
             # Monitor weights for a subset of synapses
-            self.weight_monitor = VariableMonitor(
-                [self.synapses.where_id(lambda idx: idx < 100)],  # First 100 synapses
-                ["weight"],
-            )
+            if self.use_dense_connections:
+                self.weight_monitor = VariableMonitor(
+                    [self.synapses[:100, 0]],  # First 100 synapses
+                    ["weight"],
+                )
+            else:
+                self.weight_monitor = VariableMonitor(
+                    [self.synapses.where_id(lambda idx: idx < 100)],  # First 100 synapses
+                    ["weight"],
+                )
 
     def present_pattern(self, pattern_idx, pattern_width=10):
         """Present an input pattern to create a learning scenario.
@@ -145,7 +166,7 @@ class STDPExample(SimulatorEngine):
             ax3.plot(times, weight_data[:, i].cpu(), label=f"Synapse {i}", alpha=0.7)
 
         # Also plot the final weight distribution as a heatmap below
-        final_weights = weight_data[-1, :].reshape(10, 10).cpu()
+        final_weights = weight_data[-1, :].reshape(10, -1).cpu()
         ax3.imshow(
             final_weights,
             aspect="auto",
@@ -163,7 +184,7 @@ class STDPExample(SimulatorEngine):
 
         # Create a separate figure for the final weight distribution
         plt.figure(figsize=(8, 6))
-        plt.imshow(weight_data[-1, :].reshape(10, 10).cpu(), cmap="viridis")
+        plt.imshow(weight_data[-1, :].reshape(10, -1).cpu(), cmap="viridis")
         plt.colorbar(label="Weight")
         plt.title("Final Weight Distribution (First 100 synapses)")
         plt.xlabel("Synapse ID (mod 10)")

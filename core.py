@@ -318,7 +318,7 @@ class ConnectionOperator:
         ...     A_plus=0.01
         ... )
         """
-        from .connection_groups import StaticConnection
+        from .group_connections import StaticConnection
         synapse_class = StaticConnection if synapse_class is None else synapse_class
 
         connection = synapse_class(
@@ -326,7 +326,7 @@ class ConnectionOperator:
             pos=self.pos,
         )
 
-        connection._establish_connections(pattern, **kwargs)
+        connection._establish_connection(pattern, **kwargs)
         connection._init_connection(**kwargs)
 
         # Limpiar filtros tras conectar

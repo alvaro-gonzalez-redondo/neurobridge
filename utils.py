@@ -1,15 +1,77 @@
 from __future__ import annotations
 
+from typing import Any
+
 from . import globals
 
 import logging
 import sys
 import os
 
+import torch
 import torch.distributed as dist
 
 import matplotlib
 from matplotlib import pyplot as plt
+
+
+def _compute_parameter(
+    param: Any, idx_pre: torch.Tensor, idx_post: torch.Tensor, device: str
+) -> torch.Tensor:
+    """Compute per-connection parameter values based on various input types.
+
+    Parameters
+    ----------
+    param : Any
+        The parameter specification, which can be:
+            - A scalar: Used for all connections.
+            - A tensor: Used directly if it matches the number of connections.
+            - A list: Converted to a tensor.
+            - A function: Called with (idx_pre, idx_post) to compute values.
+    idx_pre : torch.Tensor
+        Indices of pre-synaptic neurons for each connection.
+    idx_post : torch.Tensor
+        Indices of post-synaptic neurons for each connection.
+
+    Returns
+    -------
+    torch.Tensor
+        Tensor of parameter values for each connection.
+
+    Raises
+    ------
+    ValueError
+        If the tensor dimensions don't match the number of connections.
+    TypeError
+        If a function parameter doesn't return a tensor.
+    """
+    n = len(idx_pre)
+
+    if callable(param):
+        values = param(idx_pre, idx_post)
+        if not isinstance(values, torch.Tensor):
+            raise TypeError("Functions must return a tensor.")
+        if values.shape[0] != n:
+            raise ValueError(
+                f"Returned tensor must have size {n}, but it has size {values.shape[0]}."
+            )
+        return values.to(device=device)
+
+    elif isinstance(param, torch.Tensor):
+        if param.numel() == 1:
+            return torch.full((n,), param.item(), device=device)
+        if param.numel() != n:
+            raise ValueError(
+                f"Expected a tensor of length {n}, got {param.numel()}."
+            )
+        return param.to(device=device)
+
+    elif isinstance(param, list):
+        param = torch.tensor(param, device=device)
+        return _compute_parameter(param, idx_pre, idx_post, device)
+
+    else:  # Scalar
+        return torch.full((n,), float(param), device=device)
 
 
 def is_distributed() -> bool:

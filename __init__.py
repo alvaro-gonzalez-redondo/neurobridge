@@ -3,7 +3,8 @@ from .core import Node
 from .utils import log, log_error, can_display_graphics, show_or_save_plot
 from .engine import SimulatorEngine
 from .monitors import SpikeMonitor, VariableMonitor
-from .connection_groups import ConnectionGroup, StaticConnection, STDPConnection
+from .group_connections import ConnectionGroup, StaticConnection, STDPConnection
+from .dense_connections import ConnectionDense, StaticDenseConnection, STDPDenseConnection
 from .neurons import NeuronGroup, ParrotNeurons, IFNeurons, RandomSpikeNeurons
 
 __all__ = [
@@ -19,6 +20,8 @@ __all__ = [
     "ConnectionGroup",
     "StaticConnection",
     "STDPConnection",
+    "StaticDenseConnection",
+    "STDPDenseConnection",
     "NeuronGroup",
     "ParrotNeurons",
     "IFNeurons",

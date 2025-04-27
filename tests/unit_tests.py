@@ -362,7 +362,7 @@ class TestSynapses(unittest.TestCase):
         delay = torch.zeros(5, device=self.device, dtype=torch.long)
 
         synapses = StaticConnection(self.source, self.target)
-        synapses._establish_connections(
+        synapses._establish_connection(
             "specific",
             idx_pre=idx_pre,
             idx_pos=idx_pos,
@@ -395,7 +395,7 @@ class TestSynapses(unittest.TestCase):
         delay = torch.zeros(5, device=self.device, dtype=torch.long)
 
         synapses = STDPConnection(self.source, self.target)
-        synapses._establish_connections(
+        synapses._establish_connection(
             "specific",
             idx_pre=idx_pre,
             idx_pos=idx_pos,

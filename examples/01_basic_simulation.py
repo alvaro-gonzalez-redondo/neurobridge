@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 
 class BasicExample(SimulatorEngine):
     """A simple example simulation with random and IF neurons."""
+    use_dense_connections = True
 
     def build_user_network(self, rank: int, world_size: int):
         """Build a simple network of random spike generators connected to IF neurons.
@@ -45,11 +46,20 @@ class BasicExample(SimulatorEngine):
 
             # Connect the source to the target with all-to-all connectivity
             # and random weights between 0 and 0.2
-            (source >> target)(
-                pattern="all-to-all",
-                weight=lambda pre, pos: torch.rand(len(pre)) * 0.2,
-                delay=2,  # 2ms delay
-            )
+            if self.use_dense_connections:
+                (source >> target)(
+                    pattern="all-to-all",
+                    weight=torch.rand((source.size, target.size)) * 0.2,
+                    delay=2,
+                    synapse_class=StaticDenseConnection
+                )
+            else:
+                (source >> target)(
+                    pattern="all-to-all",
+                    weight=lambda pre, pos: torch.rand(len(pre)) * 0.2,
+                    delay=2,  # 2ms delay
+                )
+
 
         # --- Create monitors outside the CUDA graph ---
         with self.autoparent("normal"):

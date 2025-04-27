@@ -34,3 +34,4 @@ class DenseNode(GPUNode):
         After calling this method, all elements in the group will be selected.
         """
         self.filter.fill_(True)
+
