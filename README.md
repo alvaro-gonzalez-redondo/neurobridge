@@ -145,7 +145,7 @@ class DistributedDemo(SimulatorEngine):
   - **ParrotGroup**: Simple relay neurons
   - **RandomSpikeGenerator**: Generate random spikes according to a Poisson process
   
-- **SynapticGroup**: Base class for synaptic connections
+- **SynapseGroup**: Base class for synaptic connections
   - **StaticSynapse**: Fixed-weight synapses
   - **STDPSynapse**: Spike-Timing-Dependent Plasticity synapses
   

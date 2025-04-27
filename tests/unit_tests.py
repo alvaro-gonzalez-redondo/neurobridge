@@ -2,10 +2,9 @@ import unittest
 import torch
 
 from neurobridge import *
-from neurobridge.core import ParentStack
-from neurobridge.groups import Group, SpatialGroup
+from neurobridge.core import ParentStack, ConnectionOperator
+from neurobridge.group import Group, SpatialGroup
 from neurobridge.engine import LocalCircuit
-from neurobridge.synapses import ConnectionOperator
 
 
 class TestCore(unittest.TestCase):
@@ -322,7 +321,7 @@ class TestSynapses(unittest.TestCase):
         # Test all-to-all connection
         synapses = conn_op(pattern="all-to-all", weight=0.5, delay=1)
 
-        self.assertIsInstance(synapses, StaticSynapse)
+        self.assertIsInstance(synapses, StaticConnection)
         self.assertEqual(synapses.size, 10 * 5)  # 10 source neurons * 5 target neurons
         self.assertTrue(torch.all(synapses.weight == 0.5))
         self.assertTrue(torch.all(synapses.delay == 1))
@@ -362,9 +361,15 @@ class TestSynapses(unittest.TestCase):
         weight = torch.ones(5, device=self.device) * 0.5
         delay = torch.zeros(5, device=self.device, dtype=torch.long)
 
-        synapses = StaticSynapse(
-            self.source, self.target, idx_pre, idx_pos, weight, delay
+        synapses = StaticConnection(self.source, self.target)
+        synapses._establish_connections(
+            "specific",
+            idx_pre=idx_pre,
+            idx_pos=idx_pos,
+            weight=weight,
+            delay=delay
         )
+        synapses._init_connection()
 
         # Make neuron 0 in source spike
         spikes = torch.zeros(10, device=self.device, dtype=torch.bool)
@@ -389,13 +394,15 @@ class TestSynapses(unittest.TestCase):
         weight = torch.ones(5, device=self.device) * 0.5
         delay = torch.zeros(5, device=self.device, dtype=torch.long)
 
-        synapses = STDPSynapse(
-            self.source,
-            self.target,
-            idx_pre,
-            idx_pos,
-            delay,
-            weight,
+        synapses = STDPConnection(self.source, self.target)
+        synapses._establish_connections(
+            "specific",
+            idx_pre=idx_pre,
+            idx_pos=idx_pos,
+            weight=weight,
+            delay=delay,
+        )
+        synapses._init_connection(
             A_plus=0.1,
             A_minus=0.12,
             w_max=1.0,

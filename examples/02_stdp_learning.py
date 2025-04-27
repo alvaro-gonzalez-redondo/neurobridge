@@ -51,7 +51,7 @@ class STDPExample(SimulatorEngine):
             # Connect with STDP synapses - initially weak random weights
             self.synapses = (self.input_neurons >> self.output_neuron)(
                 pattern="all-to-all",
-                synapse_class=STDPSynapse,
+                synapse_class=STDPConnection,
                 weight=0.01,  # Initial weight
                 delay=1,  # 1ms delay
                 A_plus=0.01,  # Potentiation rate

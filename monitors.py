@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from . import globals
 from .core import Node
-from .groups import Group
+from .group import Group
 from .neurons import NeuronGroup
 
 from typing import List, Dict

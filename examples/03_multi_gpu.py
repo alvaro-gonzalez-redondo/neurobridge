@@ -83,7 +83,7 @@ class MultiGPUExample(SimulatorEngine):
                 # with STDP synapses for learning
                 self.synapses = (bridge.where_rank(0) >> self.target_neurons)(
                     pattern="one-to-one",  # Each input affects one output
-                    synapse_class=STDPSynapse,  # Use STDP for learning
+                    synapse_class=STDPConnection,  # Use STDP for learning
                     weight=0.5,  # Initial weight
                     delay=1,  # 1ms synaptic delay
                     A_plus=0.01,  # Potentiation rate

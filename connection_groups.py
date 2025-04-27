@@ -1,0 +1,376 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .neurons import NeuronGroup
+from .group import Group
+
+from typing import Any
+
+import torch
+
+
+def _compute_parameter(
+    param: Any, idx_pre: torch.Tensor, idx_post: torch.Tensor, device: str
+) -> torch.Tensor:
+    """Compute per-connection parameter values based on various input types.
+
+    Parameters
+    ----------
+    param : Any
+        The parameter specification, which can be:
+            - A scalar: Used for all connections.
+            - A tensor: Used directly if it matches the number of connections.
+            - A list: Converted to a tensor.
+            - A function: Called with (idx_pre, idx_post) to compute values.
+    idx_pre : torch.Tensor
+        Indices of pre-synaptic neurons for each connection.
+    idx_post : torch.Tensor
+        Indices of post-synaptic neurons for each connection.
+
+    Returns
+    -------
+    torch.Tensor
+        Tensor of parameter values for each connection.
+
+    Raises
+    ------
+    ValueError
+        If the tensor dimensions don't match the number of connections.
+    TypeError
+        If a function parameter doesn't return a tensor.
+    """
+    n = len(idx_pre)
+
+    if callable(param):
+        values = param(idx_pre, idx_post)
+        if not isinstance(values, torch.Tensor):
+            raise TypeError("Functions must return a tensor.")
+        if values.shape[0] != n:
+            raise ValueError(
+                f"Returned tensor must have size {n}, but it has size {values.shape[0]}."
+            )
+        return values.to(device=device)
+
+    elif isinstance(param, torch.Tensor):
+        if param.numel() == 1:
+            return torch.full((n,), param.item(), device=device)
+        if param.numel() != n:
+            raise ValueError(
+                f"Expected a tensor of length {n}, got {param.numel()}."
+            )
+        return param.to(device=device)
+
+    elif isinstance(param, list):
+        param = torch.tensor(param, device=device)
+        return _compute_parameter(param, idx_pre, idx_post, device)
+
+    else:  # Scalar
+        return torch.full((n,), float(param), device=device)
+
+class ConnectionGroup(Group):
+    """Base class for groups of synaptic connections.
+
+    Represents a collection of synaptic connections between pre-synaptic and
+    post-synaptic neuron groups, with associated weights, delays, and dynamics.
+
+    Attributes
+    ----------
+    pre : NeuronGroup
+        Pre-synaptic (source) neuron group.
+    pos : NeuronGroup
+        Post-synaptic (target) neuron group.
+    idx_pre : torch.Tensor
+        Indices of pre-synaptic neurons for each connection.
+    idx_pos : torch.Tensor
+        Indices of post-synaptic neurons for each connection.
+    weight : torch.Tensor
+        Synaptic weights for each connection.
+    delay : torch.Tensor
+        Synaptic delays in time steps for each connection.
+    _current_buffer : torch.Tensor
+        Buffer for accumulating post-synaptic currents.
+    """
+
+    pre: NeuronGroup
+    pos: NeuronGroup
+    idx_pre: torch.Tensor
+    idx_pos: torch.Tensor
+    weight: torch.Tensor
+    delay: torch.Tensor
+    _current_buffer: torch.Tensor
+
+    def __init__(
+        self,
+        pre: NeuronGroup,
+        pos: NeuronGroup,
+    ):
+        """Initialize a synaptic connection group.
+
+        Parameters
+        ----------
+        pre : NeuronGroup
+            Pre-synaptic (source) neuron group.
+        pos : NeuronGroup
+            Post-synaptic (target) neuron group.
+
+        Raises
+        ------
+        RuntimeError
+            If pre-synaptic and post-synaptic groups are on different devices.
+        """
+        if pre.device != pos.device:
+            raise RuntimeError("Connected populations must be from the same device.")
+        self.pre = pre
+        self.pos = pos
+
+    def _establish_connections(self, pattern: str, **kwargs: Any):
+        """Establish connections according to the specified pattern.
+        
+        This should be implemented by subclasses to define specific connection methods.
+        """
+
+        device = self.pre.device
+        source_indices, target_indices = None, None
+
+        if pattern == "all-to-all":
+            source_indices, target_indices = self._connect_all_to_all(**kwargs)
+
+        elif pattern == "specific":
+            source_indices, target_indices = self._connect_specific(**kwargs)
+
+        elif pattern == "one-to-one":
+            source_indices, target_indices = self._connect_one_to_one(**kwargs)
+
+        else:
+            raise NotImplementedError(
+                f"Connection pattern '{pattern}' is not implemented."
+            )
+
+        # Shared parameters for all synapses
+        delay = _compute_parameter(
+            kwargs.get("delay", 0), source_indices, target_indices, device
+        )
+        weight = _compute_parameter(
+            kwargs.get("weight", 0.0), source_indices, target_indices, device
+        )
+
+        assert torch.all(
+            delay < self.pre.delay_max
+        ), f"Connection delay ({torch.max(delay)}) must be less than the `delay_max` parameter of the presynaptic population ({self.pre.delay_max})."
+
+        # Check final connections
+        if source_indices.numel() != target_indices.numel():
+            raise RuntimeError(
+                f"The number of sources ({source_indices.numel()}) and targets ({target_indices.numel()}) do not match."
+            )
+        size = source_indices.numel()
+
+        super().__init__(device, size)
+
+        self.idx_pre = source_indices
+        self.idx_pos = target_indices
+        self.weight = torch.tensor(weight, device=self.pre.device, dtype=torch.float32)
+        self.delay = torch.tensor(delay, device=self.pre.device, dtype=torch.long)
+
+        self._current_buffer = torch.zeros(
+            self.pos.size, dtype=torch.float32, device=self.device
+        )
+    
+    def _init_connection(self, **kwargs):
+        raise NotImplementedError(f"Connection classes must implement their own initialization code.")
+
+    def _connect_all_to_all(self, **kwargs):
+        """Establish all-to-all connections."""
+        #raise NotImplementedError(f"{self.__class__.__name__} does not support all-to-all connections.")
+
+        # Filtered subsets
+        valid_pre = self.pre.filter.nonzero(as_tuple=True)[0]
+        valid_pos = self.pos.filter.nonzero(as_tuple=True)[0]
+
+        grid_pre, grid_pos = torch.meshgrid(valid_pre, valid_pos, indexing="ij")
+        source_indices = grid_pre.flatten()
+        target_indices = grid_pos.flatten()
+
+        return source_indices, target_indices
+    
+    def _connect_one_to_one(self, **kwargs):
+        """Establish one-to-one connections."""
+        #raise NotImplementedError(f"{self.__class__.__name__} does not support one-to-one connections.")
+
+        # Filtered subsets
+        valid_pre = self.pre.filter.nonzero(as_tuple=True)[0]
+        valid_pos = self.pos.filter.nonzero(as_tuple=True)[0]
+
+        assert valid_pre.numel() == valid_pos.numel()
+        source_indices = valid_pre.clone()
+        target_indices = valid_pos.clone()
+
+        return source_indices, target_indices
+    
+    def _connect_specific(self, **kwargs):
+        """Establish connections with specific indices."""
+        #raise NotImplementedError(f"{self.__class__.__name__} does not support specific connections.")
+
+        try:
+            source_indices = _compute_parameter(
+                kwargs["idx_pre"], kwargs["idx_pre"], kwargs["idx_pre"], self.pre.device
+            )
+            target_indices = _compute_parameter(
+                kwargs["idx_pos"], kwargs["idx_pos"], kwargs["idx_pos"], self.pre.device
+            )
+        except KeyError:
+            raise RuntimeError(
+                "`specific`pattern requires both 'idx_pre' and 'idx_pos' parameters."
+            )
+        
+        return source_indices, target_indices
+
+    def _process(self):
+        """Process the synaptic group for the current time step.
+
+        This method propagates spikes from pre-synaptic to post-synaptic neurons
+        and updates synaptic weights according to the learning rule.
+        """
+        super()._process()
+        self._propagate()
+        self._update()
+
+    def _propagate(self):
+        """Propagate spikes from pre-synaptic to post-synaptic neurons.
+
+        Retrieves pre-synaptic spikes with appropriate delays, multiplies by weights,
+        and injects the resulting currents into post-synaptic neurons.
+        """
+        spikes_mask = self.pre.get_spikes_at(self.delay, self.idx_pre)
+        mask_f = spikes_mask.to(self.weight.dtype)
+        contrib = self.weight * mask_f
+        self._current_buffer.zero_()
+        self._current_buffer.index_add_(0, self.idx_pos, contrib)
+        self.pos.inject_currents(self._current_buffer)
+
+    def _update(self) -> None:
+        """Update synaptic weights according to the learning rule.
+
+        This method should be implemented by subclasses to define specific
+        plasticity mechanisms.
+
+        Raises
+        ------
+        NotImplementedError
+            If not implemented by a subclass.
+        """
+        raise NotImplementedError(
+            "`update` method in `SynapseGroup` must be implemented."
+        )
+
+
+class StaticConnection(ConnectionGroup):
+    """Static (non-plastic) synaptic connections.
+
+    A simple synaptic model with fixed weights that do not change over time.
+    """
+
+    def _init_connection(self, **kwargs):
+        pass
+
+    def _update(self) -> None:
+        """Update synaptic weights (no-op for static synapses).
+
+        Static synapses have fixed weights, so this method does nothing.
+        """
+        pass
+
+
+# synapses.py
+class STDPConnection(ConnectionGroup):
+    """Spike-Timing-Dependent Plasticity (STDP) synaptic connections.
+
+    Implements STDP, a biologically-inspired learning rule where synaptic
+    weights are modified based on the relative timing of pre- and post-synaptic spikes.
+
+    Attributes
+    ----------
+    A_plus : torch.Tensor
+        Learning rate for potentiation (when pre-synaptic spike precedes post-synaptic).
+    A_minus : torch.Tensor
+        Learning rate for depression (when post-synaptic spike precedes pre-synaptic).
+    tau_plus : torch.Tensor
+        Time constant for pre-synaptic trace decay.
+    tau_minus : torch.Tensor
+        Time constant for post-synaptic trace decay.
+    w_min : torch.Tensor
+        Minimum allowed weight value.
+    w_max : torch.Tensor
+        Maximum allowed weight value.
+    x_pre : torch.Tensor
+        Pre-synaptic spike traces for each connection.
+    x_pos : torch.Tensor
+        Post-synaptic spike traces for each connection.
+    alpha_pre : torch.Tensor
+        Decay factor for pre-synaptic traces.
+    alpha_pos : torch.Tensor
+        Decay factor for post-synaptic traces.
+    _delay_1 : torch.Tensor
+        Constant tensor of ones for accessing post-synaptic spikes.
+    """
+
+    A_plus: torch.Tensor
+    A_minus: torch.Tensor
+    tau_plus: torch.Tensor
+    tau_minus: torch.Tensor
+    w_min: torch.Tensor
+    w_max: torch.Tensor
+    x_pre: torch.Tensor
+    x_pos: torch.Tensor
+    alpha_pre: torch.Tensor
+    alpha_pos: torch.Tensor
+    _delay_1: torch.Tensor
+
+    def _init_connection(self, **kwargs):
+        self.A_plus = torch.tensor(kwargs.get("A_plus", 0.01), device=self.device)
+        self.A_minus = torch.tensor(kwargs.get("A_minus", 0.012), device=self.device)
+        self.tau_plus = torch.tensor(kwargs.get("tau_plus", 20.0), device=self.device)
+        self.tau_minus = torch.tensor(kwargs.get("tau_minus", 20.0), device=self.device)
+        self.w_min = torch.tensor(kwargs.get("w_min", 0.0), device=self.device)
+        self.w_max = torch.tensor(kwargs.get("w_max", 1.0), device=self.device)
+
+        self.x_pre = torch.zeros(len(self.idx_pre), dtype=torch.float32, device=self.device)
+        self.x_pos = torch.zeros(len(self.idx_pos), dtype=torch.float32, device=self.device)
+
+        self.alpha_pre = torch.exp(-1.0 / self.tau_plus)
+        self.alpha_pos = torch.exp(-1.0 / self.tau_minus)
+
+        self._delay_1 = torch.ones_like(self.idx_pos, device=self.device)
+        
+    def _update(self) -> None:
+        """Update synaptic weights according to the STDP rule.
+
+        Implements the STDP learning rule:
+        1. Decay pre- and post-synaptic traces
+        2. Update traces based on current spikes
+        3. Potentiate weights when pre-synaptic spikes arrive at post-synaptic neurons
+        4. Depress weights when post-synaptic neurons spike
+        5. Clamp weights to the allowed range
+        """
+        self.x_pre *= self.alpha_pre
+        self.x_pos *= self.alpha_pos
+
+        # Selecting relevant spikes with the right delays
+        pre_spikes = self.pre.get_spikes_at(self.delay, self.idx_pre)
+        pos_spikes = self.pos.get_spikes_at(self._delay_1, self.idx_pos)
+
+        # Updating traces
+        self.x_pre += pre_spikes.to(torch.float32)
+        self.x_pos += pos_spikes.to(torch.float32)
+
+        # STDP - pre before post
+        dw = self.A_plus * self.x_pos * pre_spikes
+        self.weight += dw
+
+        # STDP - post before pre
+        dw = self.A_minus * self.x_pre * pos_spikes
+        self.weight += dw
+
+        self.weight.clamp_(self.w_min, self.w_max)

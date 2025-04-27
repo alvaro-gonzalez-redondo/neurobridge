@@ -5,7 +5,7 @@ from neurobridge import (
     SimulatorEngine,
     RandomSpikeNeurons,
     IFNeurons,
-    STDPSynapse,
+    STDPConnection,
     SpikeMonitor,
     show_or_save_plot,
     log,
@@ -37,7 +37,7 @@ class RandomInputSimulation(SimulatorEngine):
 
             stdp_conns = (src_neurons >> tgt_neurons)(
                 pattern="all-to-all",
-                synapse_class=STDPSynapse,
+                synapse_class=STDPConnection,
                 weight=lambda pre, pos: torch.rand(len(pre)) * 1.9e-3,
             )
 

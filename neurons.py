@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from . import globals
-from .groups import SpatialGroup
-from .synapses import ConnectionOperator
+from .core import ConnectionOperator
+from .group import SpatialGroup
 
 import torch
 
