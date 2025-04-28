@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 
 class BasicExample(SimulatorEngine):
     """A simple example simulation with random and IF neurons."""
-    use_dense_connections = True
+    use_dense_connections = False
 
     def build_user_network(self, rank: int, world_size: int):
         """Build a simple network of random spike generators connected to IF neurons.
@@ -30,7 +30,7 @@ class BasicExample(SimulatorEngine):
             # Create a random spike generator with 100 neurons firing at 5Hz
             source = RandomSpikeNeurons(
                 device=self.local_circuit.device,
-                n_neurons=100,
+                n_neurons=200,
                 firing_rate=5.0,  # Firing rate in Hz
                 delay_max=20,  # Maximum delay for spike history
             )
@@ -40,25 +40,18 @@ class BasicExample(SimulatorEngine):
                 device=self.local_circuit.device,
                 n_neurons=50,
                 threshold=1.0,  # Firing threshold
-                tau=10.0,  # Membrane time constant (ms)
+                tau=1e-2,  # Membrane time constant (ms)
                 delay_max=20,
             )
 
             # Connect the source to the target with all-to-all connectivity
             # and random weights between 0 and 0.2
-            if self.use_dense_connections:
-                (source >> target)(
-                    pattern="all-to-all",
-                    weight=torch.rand((source.size, target.size)) * 0.2,
-                    delay=2,
-                    synapse_class=StaticDenseConnection
-                )
-            else:
-                (source >> target)(
-                    pattern="all-to-all",
-                    weight=lambda pre, pos: torch.rand(len(pre)) * 0.2,
-                    delay=2,  # 2ms delay
-                )
+            (source >> target)(
+                pattern="all-to-all",
+                synapse_class=StaticDenseConnection if self.use_dense_connections else StaticConnection,
+                weight=lambda pre, pos: torch.rand(len(pre)) * 0.2,
+                delay=2,  # 2ms delay
+            )
 
 
         # --- Create monitors outside the CUDA graph ---

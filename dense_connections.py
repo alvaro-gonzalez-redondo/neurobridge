@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from .neurons import NeuronGroup
 from . import globals
 from .dense import DenseNode
+from .utils import _compute_parameter
 
 import torch
 
@@ -99,13 +100,24 @@ class ConnectionDense(DenseNode):
             raise NotImplementedError(
                 f"Connection pattern '{pattern}' is not implemented."
             )
+        if self.mask is None:
+            raise RuntimeError("Connection mask was not set by the selected connection pattern.")
+
+        # Generate dense indices
+        idx_pre, idx_pos = torch.meshgrid(
+            torch.arange(self.pre.size, device=device),
+            torch.arange(self.pos.size, device=device),
+            indexing="ij"
+        )
+        idx_pre = idx_pre.flatten()
+        idx_pos = idx_pos.flatten()
 
         # Shared parameters for all synapses
-        self.weight = kwargs.get("weight", torch.zeros(shape)).to(dtype=torch.float32, device=device)
+        self.weight = _compute_parameter(
+            kwargs.get("weight", 0.0), idx_pre, idx_pos, device
+        ).to(dtype=torch.float32).view(self.pre.size, self.pos.size)
+        
         self.delay = kwargs.get("delay", 0)
-
-        if self.weight.shape != self.shape:
-            raise ValueError(f"Weight shape {self.delay.shape} must be the same as connection shape {self.shape}")
 
         assert torch.all(
             self.delay < self.pre.delay_max
@@ -194,7 +206,7 @@ class ConnectionDense(DenseNode):
         t_indices = (globals.engine.local_circuit.t - self.delay) % self.pre.delay_max
         spikes_mask = self.pre._spike_buffer[:, t_indices]
         mask_f = spikes_mask.to(self.weight.dtype).squeeze_()
-        contrib = torch.matmul(mask_f, self.weight)
+        contrib = torch.matmul(mask_f, self.weight*self.mask)
         self.pos.inject_currents(contrib)
 
     def _update(self) -> None:
@@ -329,20 +341,20 @@ class STDPDenseConnection(ConnectionDense):
         ----------
         **kwargs : Any
             Parameters for STDP initialization:
-            - A_plus: Learning rate for potentiation (default: 0.01).
-            - A_minus: Learning rate for depression (default: 0.012).
-            - tau_plus: Time constant for pre-synaptic trace decay (default: 20.0).
-            - tau_minus: Time constant for post-synaptic trace decay (default: 20.0).
+            - A_plus: Learning rate for potentiation (default: 1e-2).
+            - A_minus: Learning rate for depression (default: 1.2e-2).
+            - tau_plus: Time constant for pre-synaptic trace decay (default: 20e-3).
+            - tau_minus: Time constant for post-synaptic trace decay (default: 20e-3).
             - w_min: Minimum allowed weight value (default: 0.0).
             - w_max: Maximum allowed weight value (default: 1.0).
         """
         device = self.device
         
         # Initialize STDP parameters
-        self.A_plus = torch.tensor(kwargs.get("A_plus", 0.01), device=device)
-        self.A_minus = torch.tensor(kwargs.get("A_minus", 0.012), device=device)
-        self.tau_plus = torch.tensor(kwargs.get("tau_plus", 20.0), device=device)
-        self.tau_minus = torch.tensor(kwargs.get("tau_minus", 20.0), device=device)
+        self.A_plus = torch.tensor(kwargs.get("A_plus", 1e-2), device=device)
+        self.A_minus = torch.tensor(kwargs.get("A_minus", 1.2e-2), device=device)
+        self.tau_plus = torch.tensor(kwargs.get("tau_plus", 20e-3), device=device)
+        self.tau_minus = torch.tensor(kwargs.get("tau_minus", 20e-3), device=device)
         self.w_min = torch.tensor(kwargs.get("w_min", 0.0), device=device)
         self.w_max = torch.tensor(kwargs.get("w_max", 1.0), device=device)
 
@@ -351,8 +363,8 @@ class STDPDenseConnection(ConnectionDense):
         self.x_pos = torch.zeros(self.pos.size, dtype=torch.float32, device=device)
 
         # Compute decay factors
-        self.alpha_pre = torch.exp(-1.0 / self.tau_plus)
-        self.alpha_pos = torch.exp(-1.0 / self.tau_minus)
+        self.alpha_pre = torch.exp(-1e-3 / self.tau_plus)
+        self.alpha_pos = torch.exp(-1e-3 / self.tau_minus)
         
     def _update(self) -> None:
         """Update synaptic weights according to the STDP rule.

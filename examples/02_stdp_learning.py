@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 class STDPExample(SimulatorEngine):
     """Simulation demonstrating STDP learning."""
-    use_dense_connections = True
+    use_dense_connections = False
 
     def build_user_network(self, rank: int, world_size: int):
         """Build a network with STDP synapses for learning.
@@ -45,44 +45,30 @@ class STDPExample(SimulatorEngine):
                 device=self.local_circuit.device,
                 n_neurons=n_output,
                 threshold=0.5,  # Lower threshold to encourage activity
-                tau=20.0,  # Slower membrane dynamics
+                tau=20e-3,  # Slower membrane dynamics
                 delay_max=30,
             )
 
             # Connect with STDP synapses - initially weak random weights
-            if self.use_dense_connections:
-                self.synapses = (self.input_neurons >> self.output_neuron)(
-                    pattern="all-to-all",
-                    synapse_class=STDPDenseConnection,
-                    weight=torch.full((n_input, n_output), 0.01),  # Initial weight
-                    delay=1,
-                    A_plus=0.01,  # Potentiation rate
-                    A_minus=0.0105,  # Depression rate (slightly stronger)
-                    tau_plus=20.0,  # Potentiation time constant
-                    tau_minus=20.0,  # Depression time constant
-                    w_min=0.0,  # Minimum weight
-                    w_max=0.5,  # Maximum weight
-                )
-            else:
-                self.synapses = (self.input_neurons >> self.output_neuron)(
-                    pattern="all-to-all",
-                    synapse_class=STDPConnection,
-                    weight=0.01,  # Initial weight
-                    delay=1,  # 1ms delay
-                    A_plus=0.01,  # Potentiation rate
-                    A_minus=0.0105,  # Depression rate (slightly stronger)
-                    tau_plus=20.0,  # Potentiation time constant
-                    tau_minus=20.0,  # Depression time constant
-                    w_min=0.0,  # Minimum weight
-                    w_max=0.5,  # Maximum weight
-                )
+            self.synapses = (self.input_neurons >> self.output_neuron)(
+                pattern="all-to-all",
+                synapse_class=STDPDenseConnection if self.use_dense_connections else STDPConnection,
+                weight=0.1,#lambda i,j: torch.rand(len(i))*0.2,  # Initial weight
+                delay=1,  # 1ms delay
+                A_plus=1e-2,  # Potentiation rate
+                A_minus=-1.2e-2,  # Depression rate (slightly stronger)
+                tau_plus=20e-3,  # Potentiation time constant
+                tau_minus=20e-3,  # Depression time constant
+                w_min=0.0,  # Minimum weight
+                w_max=0.5,  # Maximum weight
+            )
 
         with self.autoparent("normal"):
             # Monitor spikes
             self.spike_monitor = SpikeMonitor(
                 [
                     self.input_neurons.where_id(
-                        lambda idx: idx < 10
+                        lambda idx: idx < 1000
                     ),  # Sample of input neurons
                     self.output_neuron,  # The output neuron
                 ]

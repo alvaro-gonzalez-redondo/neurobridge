@@ -92,11 +92,11 @@ class ConnectionGroup(Group):
             )
 
         # Shared parameters for all synapses
-        delay = _compute_parameter(
-            kwargs.get("delay", 0), source_indices, target_indices, device
-        )
         weight = _compute_parameter(
             kwargs.get("weight", 0.0), source_indices, target_indices, device
+        )
+        delay = _compute_parameter(
+            kwargs.get("delay", 0), source_indices, target_indices, device
         )
 
         assert torch.all(
@@ -271,18 +271,18 @@ class STDPConnection(ConnectionGroup):
     _delay_1: torch.Tensor
 
     def _init_connection(self, **kwargs):
-        self.A_plus = torch.tensor(kwargs.get("A_plus", 0.01), device=self.device)
-        self.A_minus = torch.tensor(kwargs.get("A_minus", 0.012), device=self.device)
-        self.tau_plus = torch.tensor(kwargs.get("tau_plus", 20.0), device=self.device)
-        self.tau_minus = torch.tensor(kwargs.get("tau_minus", 20.0), device=self.device)
+        self.A_plus = torch.tensor(kwargs.get("A_plus", 1e-2), device=self.device)
+        self.A_minus = torch.tensor(kwargs.get("A_minus", 1.2e-2), device=self.device)
+        self.tau_plus = torch.tensor(kwargs.get("tau_plus", 20e-3), device=self.device)
+        self.tau_minus = torch.tensor(kwargs.get("tau_minus", 20e-3), device=self.device)
         self.w_min = torch.tensor(kwargs.get("w_min", 0.0), device=self.device)
         self.w_max = torch.tensor(kwargs.get("w_max", 1.0), device=self.device)
 
         self.x_pre = torch.zeros(len(self.idx_pre), dtype=torch.float32, device=self.device)
         self.x_pos = torch.zeros(len(self.idx_pos), dtype=torch.float32, device=self.device)
 
-        self.alpha_pre = torch.exp(-1.0 / self.tau_plus)
-        self.alpha_pos = torch.exp(-1.0 / self.tau_minus)
+        self.alpha_pre = torch.exp(-1e-3 / self.tau_plus)
+        self.alpha_pos = torch.exp(-1e-3 / self.tau_minus)
 
         self._delay_1 = torch.ones_like(self.idx_pos, device=self.device)
         
