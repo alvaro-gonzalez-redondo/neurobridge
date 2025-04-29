@@ -394,10 +394,10 @@ class STDPDenseConnection(ConnectionDense):
         
         # Create weight update matrix
         # Pre -> Post potentiation: outer product of pre spikes with post traces
-        potentiation = torch.outer(pre_spikes.float(), self.x_pos) * self.A_plus
+        potentiation = torch.outer(self.x_pre, pos_spikes.float()) * self.A_plus
         
         # Post -> Pre depression: outer product of pre traces with post spikes
-        depression = torch.outer(self.x_pre, pos_spikes.float()) * -self.A_minus
+        depression = torch.outer(pre_spikes.float(), self.x_pos) * self.A_minus
         
         # Combine potentiation and depression
         weight_update = potentiation + depression

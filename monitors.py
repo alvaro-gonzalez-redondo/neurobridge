@@ -175,7 +175,7 @@ class VariableMonitor(Node):
                     )
 
                 # Copy to avoid aliasing
-                self.recorded_values[i][var_name].append(value[filter].detach().clone())
+                self.recorded_values[i][var_name].append(value[filter].detach().clone().squeeze())
 
     def get_variable_tensor(
         self, group_index: int, var_name: str, to_cpu: bool = True

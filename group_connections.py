@@ -308,11 +308,11 @@ class STDPConnection(ConnectionGroup):
         self.x_pos += pos_spikes.to(torch.float32)
 
         # STDP - pre before post
-        dw = self.A_plus * self.x_pos * pre_spikes
+        dw = self.A_plus * self.x_pre * pos_spikes
         self.weight += dw
 
         # STDP - post before pre
-        dw = self.A_minus * self.x_pre * pos_spikes
+        dw = self.A_minus * self.x_pos * pre_spikes
         self.weight += dw
 
         self.weight.clamp_(self.w_min, self.w_max)
