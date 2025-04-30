@@ -133,11 +133,10 @@ class Node:
         # Nodes should be unique in the scene tree
         if node.parent is not None:
             node.parent.remove_child(node)
-
         self.children.append(node)
         node.parent = self
 
-    def remove_child(self, node: Node):
+    def remove_child(self, node: "Node") -> None:
         """Remove a child node from this node.
 
         Parameters
@@ -170,9 +169,13 @@ class Node:
 
         This method should not be overridden. Override _process() instead.
         """
+        self._call_process_children()
+        self._process()
+
+    def _call_process_children(self) -> None:
+        """Separado para que torch.compile pueda optimizarlo mejor."""
         for child in self.children:
             child._call_process()
-        self._process()
 
     def _process(self) -> None:
         """Define the node's behavior during each simulation step.

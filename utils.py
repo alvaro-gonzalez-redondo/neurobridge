@@ -85,6 +85,14 @@ def is_distributed() -> bool:
     return dist.is_available() and dist.is_initialized()
 
 
+def can_use_torch_compile() -> bool:
+    if not torch.cuda.is_available():
+        return False
+    capability = torch.cuda.get_device_capability()
+    # capability = (major, minor), ej: (7, 5) para Turing, (8, 6) para Ampere, (5, 0) en tu caso
+    return capability[0] >= 7
+
+
 def _rgb_escape(r, g, b):
     """Generate ANSI 24-bit color escape code.
 

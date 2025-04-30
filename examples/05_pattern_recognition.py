@@ -37,11 +37,11 @@ class PatternRecognitionExample(SimulatorEngine):
             )
 
             # Output layer: neurons that will learn to recognize patterns
-            self.output_layer = IFNeurons(
+            self.output_layer = SimpleIFNeurons(
                 device=self.local_circuit.device,
                 n_neurons=output_size,
                 threshold=0.7,  # Threshold for spiking
-                tau=20.0,  # Membrane time constant
+                tau_membrane=20.0,  # Membrane time constant
                 delay_max=30,
             )
 

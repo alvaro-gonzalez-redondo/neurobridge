@@ -1,7 +1,7 @@
 from neurobridge import (
     SimulatorEngine,
     RandomSpikeNeurons,
-    IFNeurons,
+    SimpleIFNeurons,
     STDPConnection,
     SpikeMonitor,
     VariableMonitor,
@@ -52,7 +52,7 @@ class RandomInputSimulation(SimulatorEngine):
         elif rank == 1:
 
             with self.autoparent("graph"):
-                tgt_neurons = IFNeurons(
+                tgt_neurons = SimpleIFNeurons(
                     device=self.local_circuit.device,
                     n_neurons=n_tgt_neurons,
                 )

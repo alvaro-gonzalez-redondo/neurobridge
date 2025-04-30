@@ -27,29 +27,25 @@ class BasicExample(SimulatorEngine):
         """
         # --- Create neurons within the CUDA graph for optimal performance ---
         with self.autoparent("graph"):
-            # Create a random spike generator with 100 neurons firing at 5Hz
-            source = RandomSpikeNeurons(
+            # Create a random spike generator
+            self.source = RandomSpikeNeurons(
                 device=self.local_circuit.device,
-                n_neurons=200,
+                n_neurons=1_000,
                 firing_rate=5.0,  # Firing rate in Hz
                 delay_max=20,  # Maximum delay for spike history
             )
 
             # Create a group of 50 integrate-and-fire neurons
-            target = IFNeurons(
+            self.target = IFNeurons(
                 device=self.local_circuit.device,
-                n_neurons=50,
-                threshold=1.0,  # Firing threshold
-                tau=1e-2,  # Membrane time constant (ms)
-                delay_max=20,
+                n_neurons=20,
             )
 
-            # Connect the source to the target with all-to-all connectivity
-            # and random weights between 0 and 0.2
-            (source >> target)(
+            # Connect the source to the target with all-to-all connectivity and random weights
+            (self.source >> self.target)(
                 pattern="all-to-all",
                 synapse_class=StaticDenseConnection if self.use_dense_connections else StaticConnection,
-                weight=lambda pre, pos: torch.rand(len(pre)) * 0.2,
+                weight=lambda pre, pos: torch.rand(len(pre)) * (3e-3/self.source.size),
                 delay=2,  # 2ms delay
             )
 
@@ -59,14 +55,14 @@ class BasicExample(SimulatorEngine):
             # Monitor spikes from a subset of neurons in each group
             self.spike_monitor = SpikeMonitor(
                 [
-                    source.where_id(lambda idx: idx < 20),  # First 20 source neurons
-                    target.where_id(lambda idx: idx < 20),  # First 20 target neurons
+                    self.source.where_id(lambda idx: idx < 20),  # First 20 source neurons
+                    self.target.where_id(lambda idx: idx < 20),  # First 20 target neurons
                 ]
             )
 
             # Monitor membrane potential for a subset of target neurons
             self.voltage_monitor = VariableMonitor(
-                [target.where_id(lambda idx: idx < 5)],  # First 5 target neurons
+                [self.target],#.where_id(lambda idx: idx < 5)],  # First 5 target neurons
                 ["V"],  # Monitor the membrane potential
             )
 
@@ -93,7 +89,7 @@ class BasicExample(SimulatorEngine):
         voltage_data = self.voltage_monitor.get_variable_tensor(0, "V")
         for i in range(voltage_data.shape[1]):
             ax2.plot(voltage_data[:, i].cpu(), label=f"Neuron {i}")
-        ax2.axhline(y=1.0, linestyle="--", color="k", alpha=0.5)  # Threshold line
+        ax2.axhline(y=self.target.threshold.cpu(), linestyle="--", color="k", alpha=0.5)  # Threshold line
         ax2.set_xlabel("Time (ms)")
         ax2.set_ylabel("Membrane Potential")
         ax2.set_title("Membrane Potential Dynamics")
@@ -106,7 +102,7 @@ class BasicExample(SimulatorEngine):
 # Main program
 if __name__ == "__main__":
     # Simulation parameters
-    simulation_length = 500  # ms
+    simulation_length = 1000  # ms
 
     # Create and initialize the simulator
     with BasicExample() as sim:

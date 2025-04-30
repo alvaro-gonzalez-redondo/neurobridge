@@ -42,11 +42,11 @@ class STDPExample(SimulatorEngine):
             )
 
             # A single output neuron that will learn through STDP
-            self.output_neuron = IFNeurons(
+            self.output_neuron = SimpleIFNeurons(
                 device=self.local_circuit.device,
                 n_neurons=self.n_output,
                 threshold=0.5,  # Lower threshold to encourage activity
-                tau=20e-3,  # Slower membrane dynamics
+                tau_membrane=20e-3,  # Slower membrane dynamics
                 delay_max=30,
             )
 

@@ -1,4 +1,4 @@
-from neurobridge import SimulatorEngine, RandomSpikeNeurons, IFNeurons, SpikeMonitor
+from neurobridge import SimulatorEngine, RandomSpikeNeurons, SimpleIFNeurons, SpikeMonitor
 import torch
 import matplotlib.pyplot as plt
 
@@ -15,8 +15,8 @@ class DemoSimulation(SimulatorEngine):
                 device=self.local_circuit.device, n_neurons=50, firing_rate=5.0
             )
             # Grupo de neuronas IF: 20 unidades
-            tgt = IFNeurons(
-                device=self.local_circuit.device, n_neurons=20, threshold=1.0, tau=0.5
+            tgt = SimpleIFNeurons(
+                device=self.local_circuit.device, n_neurons=20, threshold=1.0, tau_membrane=0.5
             )
             # Conexión all-to-all con peso fijo y retardo de 1 paso
             (src >> tgt)(

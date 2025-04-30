@@ -3,7 +3,7 @@ from __future__ import annotations
 from . import globals
 from .core import Node, GPUNode, ParentStack
 from .bridge import BridgeNeuronGroup
-from .utils import _setup_logger, log, is_distributed
+from .utils import _setup_logger, log, is_distributed, can_use_torch_compile
 
 from typing import Optional
 
@@ -243,6 +243,7 @@ class SimulatorEngine(Node):
 
         device = torch.device(f"cuda:{self.rank % self.n_gpus}")
         torch.cuda.set_device(device)
+        torch.backends.cuda.matmul.allow_tf32 = True
 
         self.local_circuit = LocalCircuit(device)
         self.add_child(self.local_circuit)
@@ -285,6 +286,15 @@ class SimulatorEngine(Node):
             self.local_circuit.add_child(self.local_circuit.bridge)
         self._call_ready()
 
+        # Compilar la parte optimizada antes de calentar y capturar
+        if can_use_torch_compile():
+            self.local_circuit.graph_root._call_process = torch.compile(
+                self.local_circuit.graph_root._call_process,
+                mode="reduce-overhead"  # Opcionalmente "max-autotune" si quieres máxima aceleración
+            )
+        else:
+            print("torch.compile no compatible con esta GPU, ejecutando sin compilar.")
+
         # Warming up the CUDA graph
         self.local_circuit.graph_root._call_ready()
         self.local_circuit.graph_root._call_process()
@@ -293,9 +303,7 @@ class SimulatorEngine(Node):
         self.local_circuit.t += 1
 
         # Capturing the graph
-        with torch.cuda.graph(
-            self.local_circuit.graph, stream=self.local_circuit.graph_stream
-        ):
+        with torch.cuda.graph(self.local_circuit.graph, stream=self.local_circuit.graph_stream):
             self.local_circuit.graph_root._call_process()
         self.local_circuit.t.zero_()
 

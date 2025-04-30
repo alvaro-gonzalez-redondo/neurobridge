@@ -4,7 +4,7 @@ from tqdm import tqdm
 from neurobridge import (
     SimulatorEngine,
     RandomSpikeNeurons,
-    IFNeurons,
+    SimpleIFNeurons,
     STDPConnection,
     SpikeMonitor,
     show_or_save_plot,
@@ -30,7 +30,7 @@ class RandomInputSimulation(SimulatorEngine):
                 firing_rate=10.0,
             )
 
-            tgt_neurons = IFNeurons(
+            tgt_neurons = SimpleIFNeurons(
                 device=self.local_circuit.device,
                 n_neurons=n_tgt_neurons,
             )

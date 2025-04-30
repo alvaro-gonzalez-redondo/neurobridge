@@ -5,7 +5,7 @@ from .engine import SimulatorEngine
 from .monitors import SpikeMonitor, VariableMonitor
 from .group_connections import ConnectionGroup, StaticConnection, STDPConnection
 from .dense_connections import ConnectionDense, StaticDenseConnection, STDPDenseConnection
-from .neurons import NeuronGroup, ParrotNeurons, IFNeurons, RandomSpikeNeurons
+from .neurons import NeuronGroup, ParrotNeurons, SimpleIFNeurons, RandomSpikeNeurons, IFNeurons
 
 __all__ = [
     "globals",
@@ -24,6 +24,7 @@ __all__ = [
     "STDPDenseConnection",
     "NeuronGroup",
     "ParrotNeurons",
-    "IFNeurons",
+    "SimpleIFNeurons",
     "RandomSpikeNeurons",
+    "IFNeurons",
 ]

@@ -71,11 +71,11 @@ class MultiGPUExample(SimulatorEngine):
             # Second GPU: Process the input with STDP learning
             with self.autoparent("graph"):
                 # Target neurons that receive input from GPU 0
-                self.target_neurons = IFNeurons(
+                self.target_neurons = SimpleIFNeurons(
                     device=self.local_circuit.device,
                     n_neurons=n_neurons_per_gpu,
                     threshold=0.9,
-                    tau=15.0,
+                    tau_membrane=15.0,
                     delay_max=20,
                 )
 

@@ -240,7 +240,7 @@ class TestNeurons(unittest.TestCase):
         """Test IFNeuronGroup behavior."""
         n_neurons = 50
         threshold = 0.8
-        group = IFNeurons(self.device, n_neurons, threshold=threshold)
+        group = SimpleIFNeurons(self.device, n_neurons, threshold=threshold)
 
         # Create dummy simulator engine for time reference
         class DummyEngine(SimulatorEngine):
@@ -308,7 +308,7 @@ class TestSynapses(unittest.TestCase):
 
         # Create source and target neuron groups
         self.source = ParrotNeurons(self.device, 10)
-        self.target = IFNeurons(self.device, 5)
+        self.target = SimpleIFNeurons(self.device, 5)
 
     def test_connection_operator(self):
         """Test the ConnectionOperator class and >> operator."""

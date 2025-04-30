@@ -223,7 +223,7 @@ class ParrotNeurons(NeuronGroup):
         self._input_currents.fill_(0.0)
 
 
-class IFNeurons(NeuronGroup):
+class SimpleIFNeurons(NeuronGroup):
     """Integrate-and-Fire neuron model.
 
     A simple Integrate-and-Fire model where the membrane potential integrates
@@ -250,7 +250,7 @@ class IFNeurons(NeuronGroup):
         spatial_dimensions: int = 2,
         delay_max: int = 20,
         threshold: float = 1.0,
-        tau: float = 0.1,
+        tau_membrane: float = 0.1,
     ):
         """Initialize an Integrate-and-Fire neuron group.
 
@@ -274,7 +274,7 @@ class IFNeurons(NeuronGroup):
         self.V = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
         self.threshold = torch.tensor([threshold], dtype=torch.float32, device=device)
         self.decay = torch.exp(
-            torch.tensor(-1e-3 / tau, dtype=torch.float32, device=device)
+            torch.tensor(-1e-3 / tau_membrane, dtype=torch.float32, device=device)
         )
 
     def _process(self):
@@ -362,3 +362,95 @@ class RandomSpikeNeurons(NeuronGroup):
         self.probabilities.uniform_()
         spikes = self.probabilities < self.firing_rate
         self._spike_buffer.index_copy_(1, t_idx, spikes.unsqueeze(1))
+
+
+class IFNeurons(NeuronGroup):
+    """Neuronas Integrate-and-Fire multicanal con potenciales de reversión y bi-exponenciales."""
+
+    V: torch.Tensor
+    threshold: torch.Tensor
+    decay: torch.Tensor
+    E_rest: torch.Tensor
+    E_channels: torch.Tensor
+    channel_states: torch.Tensor  # (n_channels, n_neurons, 2)
+    channel_decay_factors: torch.Tensor  # (n_channels, 2)
+    channel_normalization: torch.Tensor  # (n_channels,)
+    input_channels: torch.Tensor  # (n_channels, n_neurons)
+
+    def __init__(
+        self,
+        device: str,
+        n_neurons: int,
+        n_channels: int = 3,
+        channel_time_constants: list[tuple[float, float]] = (
+            (0.001, 0.005),  # AMPA: subida 1ms, caída 5ms
+            (0.001, 0.010),  # GABA: subida 1ms, caída 10ms
+            (0.002, 0.100),  # NMDA: subida 2ms, caída 100ms
+        ),
+        channel_reversal_potentials: list[float] = (
+            0.0,    # AMPA: 0 mV
+            -0.070,  # GABA: -70 mV
+            0.0,    # NMDA: 0 mV
+        ),
+        spatial_dimensions: int = 2,
+        delay_max: int = 20,
+        threshold: float = -0.050,  # -50 mV
+        tau_membrane: float = 0.010,  # 10 ms
+        E_rest: float = -0.065,  # -65 mV
+    ):
+        super().__init__(device, n_neurons, spatial_dimensions, delay_max)
+
+        assert len(channel_time_constants) == n_channels
+        assert len(channel_reversal_potentials) == n_channels
+
+        self.V = torch.full((n_neurons,), E_rest, dtype=torch.float32, device=self.device)
+        self._V_reset_buffer = torch.empty_like(self.V)
+        self.threshold = torch.tensor([threshold], dtype=torch.float32, device=self.device)
+        self.decay = torch.exp(torch.tensor(-1e-3 / tau_membrane, dtype=torch.float32, device=self.device))
+
+        tau_rise = torch.tensor([tc[0] for tc in channel_time_constants], dtype=torch.float32, device=self.device)
+        tau_decay = torch.tensor([tc[1] for tc in channel_time_constants], dtype=torch.float32, device=self.device)
+
+        self.channel_decay_factors = torch.stack([
+            torch.exp(-1e-3 / tau_rise),
+            torch.exp(-1e-3 / tau_decay)
+        ], dim=1)  # (n_channels, 2)
+
+        self.channel_normalization = (tau_decay - tau_rise) / (tau_decay * tau_rise)
+
+        self.channel_states = torch.zeros(n_channels, n_neurons, 2, dtype=torch.float32, device=self.device)
+        self.input_channels = torch.zeros(n_channels, n_neurons, dtype=torch.float32, device=self.device)
+
+        self.E_rest = torch.tensor([E_rest], dtype=torch.float32, device=self.device)
+        self.E_channels = torch.tensor(channel_reversal_potentials, dtype=torch.float32, device=self.device)
+
+    def inject_currents(self, I: torch.Tensor, chn: int=0) -> None:
+        """Inyecta corriente en un único canal, normalizada por el área."""
+        assert I.shape[0] == self.size
+        self.input_channels[chn, :].add_(I * self.channel_normalization[chn])
+
+    def _process(self) -> None:
+        """Actualiza los estados internos, integra la dinámica y genera spikes."""
+        super()._process()
+        t_idx = globals.engine.local_circuit.t % self.delay_max
+
+        # Actualización de bi-exponenciales
+        self.channel_states.mul_(self.channel_decay_factors.unsqueeze(1)).add_(
+            self.input_channels.unsqueeze(-1)
+        )
+        self.input_channels.zero_()
+
+        # Corrientes inducidas por canales considerando el potencial de reversión
+        channel_drive = self.E_channels.unsqueeze(1) - self.V.unsqueeze(0)  # (n_channels, n_neurons)
+        channel_currents = (self.channel_states[:, :, 1] - self.channel_states[:, :, 0]) * channel_drive
+        total_current = channel_currents.sum(dim=0)
+
+        # Decaimiento hacia E_rest + integración de corrientes
+        self.V.mul_(self.decay).add_(self.E_rest * (1.0 - self.decay)).add_(total_current)
+
+        # Generación de spikes
+        spikes = (self.V >= self.threshold) | self._input_spikes
+        self._spike_buffer.index_copy_(1, t_idx, spikes.unsqueeze(1))
+        torch.where(spikes, self.E_rest.expand_as(self.V), self.V, out=self._V_reset_buffer)
+        self.V.copy_(self._V_reset_buffer)
+        self._input_spikes.fill_(False)
