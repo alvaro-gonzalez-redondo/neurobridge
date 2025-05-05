@@ -34,6 +34,7 @@ class ConnectionDense(DenseNode):
     mask: torch.Tensor
     weight: torch.Tensor
     delay: torch.Tensor
+    channel: int
 
     def __init__(
         self,
@@ -83,9 +84,8 @@ class ConnectionDense(DenseNode):
         ValueError
             If weight or delay shapes don't match the connection shape.
         """
-        device = self.pre.device
         shape = (self.pre.size, self.pos.size)
-        super().__init__(device, shape)
+        super().__init__(shape, self.pre.device)
 
         if pattern == "all-to-all":
             self.mask = self._connect_all_to_all(**kwargs)
@@ -105,8 +105,8 @@ class ConnectionDense(DenseNode):
 
         # Generate dense indices
         idx_pre, idx_pos = torch.meshgrid(
-            torch.arange(self.pre.size, device=device),
-            torch.arange(self.pos.size, device=device),
+            torch.arange(self.pre.size, device=self.pre.device),
+            torch.arange(self.pos.size, device=self.pre.device),
             indexing="ij"
         )
         idx_pre = idx_pre.flatten()
@@ -114,14 +114,18 @@ class ConnectionDense(DenseNode):
 
         # Shared parameters for all synapses
         self.weight = _compute_parameter(
-            kwargs.get("weight", 0.0), idx_pre, idx_pos, device
+            kwargs.get("weight", 0.0), idx_pre, idx_pos, self.pre.device
         ).to(dtype=torch.float32).view(self.pre.size, self.pos.size)
         
         self.delay = kwargs.get("delay", 0)
 
+        self.channel = kwargs.get("channel", 0)
+
         assert torch.all(
             self.delay < self.pre.delay_max
         ), f"Connection delay ({torch.max(self.delay)}) must be less than the `delay_max` parameter of the presynaptic population ({self.pre.delay_max})."
+
+        assert self.channel < self.pos.n_channels, f"Channel {self.channel} does not exist in post-synaptic neuron with {self.pos.n_channels} channels."
 
     def _init_connection(self, **kwargs):
         pass
@@ -207,7 +211,7 @@ class ConnectionDense(DenseNode):
         spikes_mask = self.pre._spike_buffer[:, t_indices]
         mask_f = spikes_mask.to(self.weight.dtype).squeeze_()
         contrib = torch.matmul(mask_f, self.weight*self.mask)
-        self.pos.inject_currents(contrib)
+        self.pos.inject_currents(contrib, self.channel)
 
     def _update(self) -> None:
         """Update synaptic weights according to the learning rule.

@@ -11,7 +11,7 @@ class DenseNode(GPUNode):
     shape: tuple
     filter: torch.Tensor
 
-    def __init__(self, device: str, shape: tuple):
+    def __init__(self, shape: tuple, device: str):
         super().__init__(device)
         self.shape = shape
         self.filter = torch.ones(shape, dtype=torch.bool)

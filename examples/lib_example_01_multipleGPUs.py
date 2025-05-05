@@ -32,18 +32,11 @@ class PingPongRingSimulation(SimulatorEngine):
             )
 
             # Envía a la siguiente GPU (o a sí misma si está sola)
-            if True:
-                (local_neurons >> bridge.where_rank(rank))(
-                    pattern="one-to-one",
-                    delay=0,
-                    weight=1.0,
-                )
-            else:
-                (local_neurons >> local_neurons)(
-                    pattern="one-to-one",
-                    delay=10,
-                    weight=1.0,
-                )
+            (local_neurons >> bridge.where_rank(rank))(
+                pattern="one-to-one",
+                delay=0,
+                weight=1.0,
+            )
 
             # Recibe de la GPU anterior (o de sí misma si está sola)
             (bridge.where_rank((rank - 1) % world_size) >> local_neurons)(

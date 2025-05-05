@@ -29,7 +29,7 @@ class Group(GPUNode):
     size: int
     filter: torch.Tensor
 
-    def __init__(self, device: str, size: int):
+    def __init__(self, size: int, device: str = None):
         """Initialize a new Group.
 
         Parameters
@@ -122,7 +122,7 @@ class SpatialGroup(Group):
     spatial_dimensions: torch.Tensor
     positions: torch.Tensor
 
-    def __init__(self, device: str, size: int, spatial_dimensions: int = 2):
+    def __init__(self, size: int, spatial_dimensions: int = 2, device: str = None):
         """Initialize a new SpatialGroup.
 
         Parameters
@@ -134,7 +134,7 @@ class SpatialGroup(Group):
         spatial_dimensions : int, optional
             Number of spatial dimensions, by default 2.
         """
-        super().__init__(device, size)
+        super().__init__(size=size, device=device)
         self.spatial_dimensions = torch.tensor(
             spatial_dimensions, dtype=torch.int32, device=self.device
         )

@@ -72,7 +72,7 @@ class SpikeMonitor(Node):
             neuron_ids = neuron_ids[is_filtered]
 
             delay_slots = spike_indices[:, 1][is_filtered]
-            times = globals.engine.local_circuit.t - delay_max + delay_slots
+            times = globals.engine.local_circuit.t - delay_max + delay_slots +1 #TODO: Check if this +1 is really necessary to avoid negative time values
 
             spikes_tensor = torch.stack(
                 [neuron_ids, times], dim=1

@@ -42,6 +42,7 @@ class ConnectionGroup(Group):
     idx_pos: torch.Tensor
     weight: torch.Tensor
     delay: torch.Tensor
+    channel: int
     _current_buffer: torch.Tensor
 
     def __init__(
@@ -73,8 +74,6 @@ class ConnectionGroup(Group):
         
         This can be implemented by subclasses to define specific connection methods.
         """
-
-        device = self.pre.device
         source_indices, target_indices = None, None
 
         if pattern == "all-to-all":
@@ -93,11 +92,12 @@ class ConnectionGroup(Group):
 
         # Shared parameters for all synapses
         weight = _compute_parameter(
-            kwargs.get("weight", 0.0), source_indices, target_indices, device
+            kwargs.get("weight", 0.0), source_indices, target_indices, self.pre.device
         )
         delay = _compute_parameter(
-            kwargs.get("delay", 0), source_indices, target_indices, device
+            kwargs.get("delay", 0), source_indices, target_indices, self.pre.device
         )
+        channel = kwargs.get("channel", 0)
 
         assert torch.all(
             delay < self.pre.delay_max
@@ -110,15 +110,16 @@ class ConnectionGroup(Group):
             )
         size = source_indices.numel()
 
-        super().__init__(device, size)
+        super().__init__(size=size, device=self.pre.device)
 
         self.idx_pre = source_indices
         self.idx_pos = target_indices
         self.weight = torch.tensor(weight, device=self.pre.device, dtype=torch.float32)
         self.delay = torch.tensor(delay, device=self.pre.device, dtype=torch.long)
+        self.channel = channel
 
         self._current_buffer = torch.zeros(
-            self.pos.size, dtype=torch.float32, device=self.device
+            self.pos.size, dtype=torch.float32, device=self.pre.device
         )
     
     def _init_connection(self, **kwargs):
@@ -191,7 +192,7 @@ class ConnectionGroup(Group):
         contrib = self.weight * mask_f
         self._current_buffer.zero_()
         self._current_buffer.index_add_(0, self.idx_pos, contrib)
-        self.pos.inject_currents(self._current_buffer)
+        self.pos.inject_currents(self._current_buffer, self.channel)
 
     def _update(self) -> None:
         """Update synaptic weights according to the learning rule.

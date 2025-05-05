@@ -189,3 +189,5 @@ cython_debug/
 
 # Other
 settings.json
+*log_rank*.txt
+*.pyc

@@ -1,6 +1,6 @@
 from . import globals
 from .core import Node
-from .utils import log, log_error, can_display_graphics, show_or_save_plot
+from .utils import log, log_error, can_display_graphics, show_or_save_plot, smooth_spikes
 from .engine import SimulatorEngine
 from .monitors import SpikeMonitor, VariableMonitor
 from .group_connections import ConnectionGroup, StaticConnection, STDPConnection
@@ -14,6 +14,7 @@ __all__ = [
     "log_error",
     "can_display_graphics",
     "show_or_save_plot",
+    "smooth_spikes",
     "SimulatorEngine",
     "SpikeMonitor",
     "VariableMonitor",

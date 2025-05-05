@@ -98,7 +98,7 @@ class TestGroup(unittest.TestCase):
     def test_group_creation(self):
         """Test Group initialization."""
         size = 100
-        group = Group(self.device, size)
+        group = Group(size=size, device=self.device)
 
         self.assertEqual(group.size, size)
         self.assertEqual(group.filter.shape, (size,))
@@ -110,7 +110,7 @@ class TestGroup(unittest.TestCase):
     def test_filter_operations(self):
         """Test filtering operations on Group."""
         size = 100
-        group = Group(self.device, size)
+        group = Group(size=size, device=self.device)
 
         # Filter even indices
         filtered = group.where_id(lambda ids: ids % 2 == 0)
@@ -137,7 +137,7 @@ class TestGroup(unittest.TestCase):
         """Test SpatialGroup initialization and operations."""
         size = 100
         spatial_dims = 3
-        group = SpatialGroup(self.device, size, spatial_dims)
+        group = SpatialGroup(size=size, spatial_dimensions=spatial_dims, device=self.device)
 
         self.assertEqual(group.spatial_dimensions.item(), spatial_dims)
         self.assertEqual(group.positions.shape, (size, spatial_dims))
@@ -167,11 +167,11 @@ class TestNeurons(unittest.TestCase):
         """Test NeuronGroup initialization and methods."""
         n_neurons = 50
         delay_max = 15
-        group = NeuronGroup(self.device, n_neurons, delay_max=delay_max)
+        group = NeuronGroup(n_neurons=n_neurons, delay_max=delay_max, device=self.device)
 
         self.assertEqual(group.delay_max.item(), delay_max)
         self.assertEqual(group._spike_buffer.shape, (n_neurons, delay_max))
-        self.assertEqual(group._input_currents.shape, (n_neurons,))
+        self.assertEqual(group._input_currents.shape, (n_neurons,1))
         self.assertEqual(group._input_spikes.shape, (n_neurons,))
 
         # Test get_spike_buffer
@@ -181,7 +181,7 @@ class TestNeurons(unittest.TestCase):
         # Test inject_currents
         currents = torch.rand(n_neurons, device=self.device)
         group.inject_currents(currents)
-        self.assertTrue(torch.all(group._input_currents == currents))
+        self.assertTrue(torch.all(group._input_currents.squeeze() == currents))
 
         # Test inject_spikes
         spikes = torch.zeros(n_neurons, device=self.device, dtype=torch.bool)
@@ -193,11 +193,11 @@ class TestNeurons(unittest.TestCase):
     def test_parrot_neurons(self):
         """Test ParrotGroup behavior."""
         n_neurons = 50
-        group = ParrotNeurons(self.device, n_neurons)
+        group = ParrotNeurons(n_neurons=n_neurons, device=self.device)
 
         # Create dummy simulator engine for time reference
         class DummyEngine(SimulatorEngine):
-            def build_user_network(self, rank, world_size):
+            def build_user_network(self, rank, world_size, device):
                 pass
 
         # Create an engine instance but don't fully initialize
@@ -240,11 +240,11 @@ class TestNeurons(unittest.TestCase):
         """Test IFNeuronGroup behavior."""
         n_neurons = 50
         threshold = 0.8
-        group = SimpleIFNeurons(self.device, n_neurons, threshold=threshold)
+        group = SimpleIFNeurons(n_neurons=n_neurons, threshold=threshold, device=self.device)
 
         # Create dummy simulator engine for time reference
         class DummyEngine(SimulatorEngine):
-            def build_user_network(self, rank, world_size):
+            def build_user_network(self, rank, world_size, device):
                 pass
 
         # Create an engine instance but don't fully initialize
@@ -295,7 +295,7 @@ class TestSynapses(unittest.TestCase):
 
         # Create dummy simulator engine for time reference
         class DummyEngine(SimulatorEngine):
-            def build_user_network(self, rank, world_size):
+            def build_user_network(self, rank, world_size, device):
                 pass
 
         # Create an engine instance but don't fully initialize
@@ -307,8 +307,8 @@ class TestSynapses(unittest.TestCase):
         )
 
         # Create source and target neuron groups
-        self.source = ParrotNeurons(self.device, 10)
-        self.target = SimpleIFNeurons(self.device, 5)
+        self.source = ParrotNeurons(10, device=self.device)
+        self.target = SimpleIFNeurons(5, device=self.device)
 
     def test_connection_operator(self):
         """Test the ConnectionOperator class and >> operator."""
@@ -327,7 +327,7 @@ class TestSynapses(unittest.TestCase):
         self.assertTrue(torch.all(synapses.delay == 1))
 
         # Test one-to-one connection
-        source2 = ParrotNeurons(self.device, 5)  # Same size as target
+        source2 = ParrotNeurons(5, device=self.device)  # Same size as target
         synapses = (source2 >> self.target)(pattern="one-to-one", weight=0.2)
 
         self.assertEqual(synapses.size, 5)  # 5 connections for one-to-one

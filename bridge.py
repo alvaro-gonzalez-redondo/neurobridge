@@ -83,30 +83,30 @@ class BridgeNeuronGroup(NeuronGroup):
             If n_bridge_steps is not less than delay_max.
         """
         super().__init__(
-            device,
-            n_local_neurons * world_size,
-            spatial_dimensions=spatial_dimensions,
-            delay_max=delay_max,
+            n_neurons = n_local_neurons * world_size,
+            spatial_dimensions = spatial_dimensions,
+            delay_max = delay_max,
+            device = device,
         )
         self.n_local_neurons = n_local_neurons
         self.n_bridge_steps = n_bridge_steps
         self.rank = rank
         self.n_bits = n_local_neurons * n_bridge_steps
         self._write_buffer = torch.zeros(
-            (n_local_neurons, n_bridge_steps), dtype=torch.bool, device=device
+            (n_local_neurons, n_bridge_steps), dtype=torch.bool, device=self.device
         )
         # Crear buffer para comunicación
         self._bool2uint8_weights = torch.tensor(
-            [1, 2, 4, 8, 16, 32, 64, 128], dtype=torch.uint8, device=device
+            [1, 2, 4, 8, 16, 32, 64, 128], dtype=torch.uint8, device=self.device
         )
         dummy_packed = self._bool_to_uint8(
             torch.zeros(
-                n_local_neurons * n_bridge_steps, dtype=torch.bool, device=device
+                n_local_neurons * n_bridge_steps, dtype=torch.bool, device=self.device
             )
         )
         self._gathered = [torch.empty_like(dummy_packed) for _ in range(world_size)]
         self._time_range = torch.arange(
-            self.n_bridge_steps, dtype=torch.long, device=device
+            self.n_bridge_steps, dtype=torch.long, device=self.device
         )
         assert (
             n_bridge_steps < delay_max

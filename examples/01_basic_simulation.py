@@ -47,6 +47,7 @@ class BasicExample(SimulatorEngine):
                 synapse_class=StaticDenseConnection if self.use_dense_connections else StaticConnection,
                 weight=lambda pre, pos: torch.rand(len(pre)) * (3e-3/self.source.size),
                 delay=2,  # 2ms delay
+                channel=0,
             )
 
 

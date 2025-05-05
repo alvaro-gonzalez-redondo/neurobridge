@@ -21,14 +21,14 @@ class ParentStack(contextlib.AbstractContextManager):
 
     Examples
     --------
-    >>> with _ParentStack(parent_node):
+    >>> with ParentStack(parent_node):
     ...     # Any Node created in this context will be added as a child to parent_node
     ...     child_node = Node()  # Automatically added as a child to parent_node
     """
 
     _stack_var = contextvars.ContextVar("_stack", default=[])
 
-    def __init__(self, parent: Node):
+    def __init__(self, parent: GPUNode):
         """Initialize the ParentStack with a parent node.
 
         Parameters
@@ -200,7 +200,7 @@ class GPUNode(Node):
 
     device: torch.device
 
-    def __init__(self, device: str):
+    def __init__(self, device: str = None):
         """Initialize a new _GPUNode.
 
         Parameters
@@ -210,7 +210,13 @@ class GPUNode(Node):
             This will be converted to a torch.device.
         """
         super().__init__()
-        self.device = torch.device(device)
+
+        if device is None:
+            parent = ParentStack.current_parent()
+            if parent is not None:
+                self.device = parent.device
+        else:
+            self.device = torch.device(device)
 
 
 class ConnectionOperator:

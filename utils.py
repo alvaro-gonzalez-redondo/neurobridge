@@ -11,8 +11,12 @@ import os
 import torch
 import torch.distributed as dist
 
+import numpy as np
+
 import matplotlib
 from matplotlib import pyplot as plt
+
+from scipy.ndimage import gaussian_filter1d
 
 
 def _compute_parameter(
@@ -306,3 +310,21 @@ def show_or_save_plot(filename="output.png", log=None):
             log(f"Plot saved as '{filename}'")
         else:
             print(f"Plot saved as '{filename}'")
+
+
+def smooth_spikes(spk_times, n_neurons=1, from_time=0.0, to_time=1.0, sigma=5):
+    # Parámetros
+    dt = 1.0  # tamaño del paso de simulación en ms
+    duration = int(to_time - from_time)
+    num_neurons = n_neurons
+    bin_size = 1  # en pasos de simulación
+
+    # Histograma global
+    spike_counts = torch.bincount(spk_times.to(torch.int64), minlength=duration)
+    rate = spike_counts.numpy() / num_neurons / (bin_size * dt / 1000)  # en Hz
+
+    # Suavizado
+    time = np.arange(duration) * dt
+    smoothed_rate = gaussian_filter1d(rate, sigma=sigma)
+
+    return time, smoothed_rate

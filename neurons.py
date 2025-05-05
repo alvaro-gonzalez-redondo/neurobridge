@@ -20,22 +20,24 @@ class NeuronGroup(SpatialGroup):
     _spike_buffer : torch.Tensor
         Boolean tensor of shape (n_neurons, delay_max) that stores spike history.
     _input_currents : torch.Tensor
-        Float tensor of shape (n_neurons,) for accumulating input currents.
+        Float tensor of shape (n_neurons, n_channels) for accumulating input currents.
     _input_spikes : torch.Tensor
         Boolean tensor of shape (n_neurons,) for injected spikes.
     """
 
-    delay_max: torch.Tensor
-    _spike_buffer: torch.Tensor
-    _input_currents: torch.Tensor
-    _input_spikes: torch.Tensor
+    delay_max: torch.Tensor #[1]
+    _spike_buffer: torch.Tensor #[neuron, delay]
+    _input_currents: torch.Tensor #[neuron, channel]
+    n_channels: int
+    _input_spikes: torch.Tensor #[neuron]
 
     def __init__(
         self,
-        device: str,
         n_neurons: int,
         spatial_dimensions: int = 2,
         delay_max: int = 20,
+        n_channels: int = 1,
+        device: str = None,
     ):
         """Initialize a group of neurons.
 
@@ -50,14 +52,15 @@ class NeuronGroup(SpatialGroup):
         delay_max : int, optional
             Maximum delay in time steps for spike propagation, by default 20.
         """
-        super().__init__(device, n_neurons, spatial_dimensions)
+        super().__init__(n_neurons, spatial_dimensions, device)
         self.delay_max = torch.tensor([delay_max], dtype=torch.int, device=self.device)
         self._spike_buffer = torch.zeros(
             (n_neurons, delay_max), dtype=torch.bool, device=self.device
         )
         self._input_currents = torch.zeros(
-            n_neurons, dtype=torch.float32, device=self.device
+            (n_neurons, n_channels), dtype=torch.float32, device=self.device
         )
+        self.n_channels = n_channels
         self._input_spikes = torch.zeros(
             n_neurons, dtype=torch.bool, device=self.device
         )
@@ -72,7 +75,7 @@ class NeuronGroup(SpatialGroup):
         """
         return self._spike_buffer
 
-    def inject_currents(self, I: torch.Tensor) -> None:
+    def inject_currents(self, I: torch.Tensor, chn: int=0) -> None:
         """Inject input currents into the neurons.
 
         The input currents are accumulated and processed during the next call
@@ -89,7 +92,7 @@ class NeuronGroup(SpatialGroup):
             If the shape of I doesn't match the number of neurons.
         """
         assert I.shape[0] == self.size
-        self._input_currents += I
+        self._input_currents[:,chn].add_(I)
 
     def inject_spikes(self, spikes: torch.Tensor) -> None:
         """Force neurons to spike, independently of their weights or state.
@@ -215,7 +218,7 @@ class ParrotNeurons(NeuronGroup):
 
         # Process input currents
         # Generate spikes for neurons receiving any positive current
-        spikes = self._input_currents > 0
+        spikes = self._input_currents.squeeze() > 0
         self._spike_buffer.index_copy_(
             1, t_idx, (self._spike_buffer.index_select(1, t_idx) | spikes.unsqueeze(1))
         )
@@ -245,12 +248,12 @@ class SimpleIFNeurons(NeuronGroup):
 
     def __init__(
         self,
-        device: str,
         n_neurons: int,
         spatial_dimensions: int = 2,
         delay_max: int = 20,
         threshold: float = 1.0,
         tau_membrane: float = 0.1,
+        device: str = None,
     ):
         """Initialize an Integrate-and-Fire neuron group.
 
@@ -270,11 +273,11 @@ class SimpleIFNeurons(NeuronGroup):
             Membrane time constant in seconds, by default 0.1.
             Determines the decay rate of the membrane potential.
         """
-        super().__init__(device, n_neurons, spatial_dimensions, delay_max)
+        super().__init__(n_neurons=n_neurons, spatial_dimensions=spatial_dimensions, delay_max=delay_max, n_channels=1, device=device)
         self.V = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
-        self.threshold = torch.tensor([threshold], dtype=torch.float32, device=device)
+        self.threshold = torch.tensor([threshold], dtype=torch.float32, device=self.device)
         self.decay = torch.exp(
-            torch.tensor(-1e-3 / tau_membrane, dtype=torch.float32, device=device)
+            torch.tensor(-1e-3 / tau_membrane, dtype=torch.float32, device=self.device)
         )
 
     def _process(self):
@@ -289,7 +292,7 @@ class SimpleIFNeurons(NeuronGroup):
 
         # Update potential with decay and input
         self.V *= self.decay
-        self.V += self._input_currents
+        self.V += self._input_currents.squeeze()
         self._input_currents.fill_(0.0)
 
         # Determine which neurons spike
@@ -318,11 +321,11 @@ class RandomSpikeNeurons(NeuronGroup):
 
     def __init__(
         self,
-        device: str,
         n_neurons: int,
         firing_rate: float = 10.0,
         spatial_dimensions: int = 2,
         delay_max: int = 20,
+        device: str = None,
     ):
         """Initialize a random spike generator neuron group.
 
@@ -340,15 +343,15 @@ class RandomSpikeNeurons(NeuronGroup):
             Maximum delay in time steps for spike propagation, by default 20.
         """
         super().__init__(
-            device,
-            n_neurons,
-            spatial_dimensions=spatial_dimensions,
-            delay_max=delay_max,
+            n_neurons = n_neurons,
+            spatial_dimensions = spatial_dimensions,
+            delay_max = delay_max,
+            device = device,
         )
         self.firing_rate = torch.tensor(
-            firing_rate * 1e-3, dtype=torch.float32, device=device
+            firing_rate * 1e-3, dtype=torch.float32, device=self.device
         )
-        self.probabilities = torch.zeros(n_neurons, dtype=torch.float32, device=device)
+        self.probabilities = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
 
     def _process(self):
         """Generate random spikes based on the firing rate.
@@ -372,15 +375,16 @@ class IFNeurons(NeuronGroup):
     decay: torch.Tensor
     E_rest: torch.Tensor
     E_channels: torch.Tensor
-    channel_states: torch.Tensor  # (n_channels, n_neurons, 2)
+    channel_states: torch.Tensor  # (n_neurons, n_channels, 2)
     channel_decay_factors: torch.Tensor  # (n_channels, 2)
     channel_normalization: torch.Tensor  # (n_channels,)
-    input_channels: torch.Tensor  # (n_channels, n_neurons)
+    input_channels: torch.Tensor  # (n_neurons, n_channels)
 
     def __init__(
         self,
-        device: str,
         n_neurons: int,
+        spatial_dimensions: int = 2,
+        delay_max: int = 20,
         n_channels: int = 3,
         channel_time_constants: list[tuple[float, float]] = (
             (0.001, 0.005),  # AMPA: subida 1ms, caída 5ms
@@ -392,13 +396,17 @@ class IFNeurons(NeuronGroup):
             -0.070,  # GABA: -70 mV
             0.0,    # NMDA: 0 mV
         ),
-        spatial_dimensions: int = 2,
-        delay_max: int = 20,
         threshold: float = -0.050,  # -50 mV
         tau_membrane: float = 0.010,  # 10 ms
         E_rest: float = -0.065,  # -65 mV
+        device: str = None,
     ):
-        super().__init__(device, n_neurons, spatial_dimensions, delay_max)
+        super().__init__(
+            n_neurons = n_neurons,
+            spatial_dimensions = spatial_dimensions,
+            delay_max = delay_max,
+            n_channels = n_channels,
+            device = device)
 
         assert len(channel_time_constants) == n_channels
         assert len(channel_reversal_potentials) == n_channels
@@ -418,16 +426,11 @@ class IFNeurons(NeuronGroup):
 
         self.channel_normalization = (tau_decay - tau_rise) / (tau_decay * tau_rise)
 
-        self.channel_states = torch.zeros(n_channels, n_neurons, 2, dtype=torch.float32, device=self.device)
-        self.input_channels = torch.zeros(n_channels, n_neurons, dtype=torch.float32, device=self.device)
+        self.channel_states = torch.zeros(n_neurons, n_channels, 2, dtype=torch.float32, device=self.device)
+        self.input_channels = torch.zeros(n_neurons, n_channels, dtype=torch.float32, device=self.device)
 
         self.E_rest = torch.tensor([E_rest], dtype=torch.float32, device=self.device)
         self.E_channels = torch.tensor(channel_reversal_potentials, dtype=torch.float32, device=self.device)
-
-    def inject_currents(self, I: torch.Tensor, chn: int=0) -> None:
-        """Inyecta corriente en un único canal, normalizada por el área."""
-        assert I.shape[0] == self.size
-        self.input_channels[chn, :].add_(I * self.channel_normalization[chn])
 
     def _process(self) -> None:
         """Actualiza los estados internos, integra la dinámica y genera spikes."""
@@ -435,15 +438,15 @@ class IFNeurons(NeuronGroup):
         t_idx = globals.engine.local_circuit.t % self.delay_max
 
         # Actualización de bi-exponenciales
-        self.channel_states.mul_(self.channel_decay_factors.unsqueeze(1)).add_(
-            self.input_channels.unsqueeze(-1)
-        )
-        self.input_channels.zero_()
+        normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)
+        self.channel_states.mul_(self.channel_decay_factors.unsqueeze(0)) # (1, n_channels, 2)
+        self.channel_states.add_(normalized_input.unsqueeze(-1)) # (n_neurons, n_channels, 2)
+        self._input_currents.zero_()
 
         # Corrientes inducidas por canales considerando el potencial de reversión
-        channel_drive = self.E_channels.unsqueeze(1) - self.V.unsqueeze(0)  # (n_channels, n_neurons)
+        channel_drive = self.E_channels.unsqueeze(0) - self.V.unsqueeze(1)  # (n_neurons, n_channels)
         channel_currents = (self.channel_states[:, :, 1] - self.channel_states[:, :, 0]) * channel_drive
-        total_current = channel_currents.sum(dim=0)
+        total_current = channel_currents.sum(dim=1)
 
         # Decaimiento hacia E_rest + integración de corrientes
         self.V.mul_(self.decay).add_(self.E_rest * (1.0 - self.decay)).add_(total_current)
@@ -451,6 +454,5 @@ class IFNeurons(NeuronGroup):
         # Generación de spikes
         spikes = (self.V >= self.threshold) | self._input_spikes
         self._spike_buffer.index_copy_(1, t_idx, spikes.unsqueeze(1))
-        torch.where(spikes, self.E_rest.expand_as(self.V), self.V, out=self._V_reset_buffer)
-        self.V.copy_(self._V_reset_buffer)
+        torch.where(spikes, self.E_rest.expand_as(self.V), self.V, out=self.V)
         self._input_spikes.fill_(False)

@@ -63,8 +63,8 @@ class LocalCircuit(GPUNode):
             The GPU device for this circuit.
         """
         super().__init__(device)
-        self.t = torch.zeros(1, dtype=torch.long, device=device)
-        self.graph_root = CUDAGraphSubTree(device=device)
+        self.t = torch.zeros(1, dtype=torch.long, device=self.device)
+        self.graph_root = CUDAGraphSubTree(device=self.device)
         self.graph = torch.cuda.CUDAGraph()
         self.graph_stream = torch.cuda.Stream()
         self.bridge = None
@@ -257,7 +257,7 @@ class SimulatorEngine(Node):
         # Creates the custom user model
         log("#################################################################")
         log("Neurobridge initialized. Building user network...")
-        self.build_user_network(self.rank, self.world_size)
+        self.build_user_network(rank=self.rank, world_size=self.world_size, device=device)
         log("User network built successfully.")
 
     def set_random_seeds(self, seed):
@@ -342,7 +342,7 @@ class SimulatorEngine(Node):
         self.local_circuit.bridge = bridge
         self.local_circuit.add_child(bridge)
 
-    def build_user_network(self, rank: int, world_size: int) -> None:
+    def build_user_network(self, rank: int, world_size: int, device: str) -> None:
         """Build the user-defined neural network.
 
         This method must be implemented by subclasses to define the
@@ -354,6 +354,8 @@ class SimulatorEngine(Node):
             Rank (process index) in the distributed setup.
         world_size : int
             Number of processes in the distributed setup.
+        device : str
+            Device identifier used in this part of the network.
 
         Raises
         ------
