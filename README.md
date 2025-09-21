@@ -28,7 +28,7 @@ pip install neurobridge
 Here's a simple example of a random spike generator connected to integrate-and-fire neurons:
 
 ```python
-from neurobridge.all import *
+from neurobridge import *
 import torch
 import matplotlib.pyplot as plt
 
@@ -90,7 +90,10 @@ with SimpleDemo() as sim:
 NeuroBridge makes it easy to distribute simulations across multiple GPUs:
 
 ```python
-from neurobridge.all import *
+# Run with torchrun to use multiple GPUs
+# torchrun --nproc_per_node=2 distributed_example.py
+
+from neurobridge import *
 from tqdm import tqdm
 
 class DistributedDemo(SimulatorEngine):
@@ -133,9 +136,6 @@ class DistributedDemo(SimulatorEngine):
                 
             with self.autoparent("normal"):
                 self.spike_monitor = SpikeMonitor([target.where_id(lambda ids: ids < 20)])
-
-# Run with torchrun to use multiple GPUs
-# torchrun --nproc_per_node=2 distributed_example.py
 ```
 
 ## Core Components
@@ -176,6 +176,6 @@ If you use NeuroBridge in your research, please cite:
   author = {Álvaro González-Redondo},
   title = {NeuroBridge: Multi-GPU Spiking Neural Networks},
   url = {https://github.com/alvaro-gonzalez-redondo/neurobridge},
-  year = {2023},
+  year = {2025},
 }
 ```

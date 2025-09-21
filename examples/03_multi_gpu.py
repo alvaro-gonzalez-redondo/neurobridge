@@ -14,22 +14,15 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 
-class MultiGPUExample(SimulatorEngine):
+class MultiGPUExample(Simulator):
     """A distributed simulation running across multiple GPUs."""
 
-    def build_user_network(self, rank: int, world_size: int):
-        """Build a network distributed across GPUs.
+    def build_network(self):
+        """Build a network distributed across GPUs."""
 
-        Parameters
-        ----------
-        rank : int
-            Current GPU rank (0, 1, ..., world_size-1).
-        world_size : int
-            Total number of GPUs.
-        """
         # Verify we have at least 2 GPUs for this example
-        if world_size < 2:
-            log(f"This example requires at least 2 GPUs, but only {world_size} found.")
+        if self.world_size < 2:
+            log(f"This example requires at least 2 GPUs, but only {self.world_size} found.")
             log("It will still run, but in a single-GPU mode.")
 
         # Parameters for the network
@@ -41,7 +34,7 @@ class MultiGPUExample(SimulatorEngine):
         bridge = self.local_circuit.bridge
 
         # Different setup for each GPU
-        if rank == 0:
+        if self.local_circuit.rank == 0:
             # First GPU: Generate input patterns
             with self.autoparent("graph"):
                 # Source neurons that generate random spikes
@@ -67,7 +60,7 @@ class MultiGPUExample(SimulatorEngine):
                     [self.source_neurons.where_id(lambda idx: idx < 20)]
                 )
 
-        elif rank == 1:
+        elif self.local_circuit.rank == 1:
             # Second GPU: Process the input with STDP learning
             with self.autoparent("graph"):
                 # Target neurons that receive input from GPU 0

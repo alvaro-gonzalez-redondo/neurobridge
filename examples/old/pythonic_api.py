@@ -1,10 +1,10 @@
-from neurobridge.engine import SimulatorEngine
+from neurobridge.engine import Simulator
 from neurobridge.neuron_groups.if_neuron_group import IandF
 
 
-class MyEngine(SimulatorEngine):
+class MyEngine(Simulator):
 
-    def build_user_network(self):
+    def build_network(self):
         with self.device(0):
             # Crear poblaciones
             popA = IandF(size=12, delay=5)

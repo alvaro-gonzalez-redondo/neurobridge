@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from . import globals
 from .core import Node, GPUNode, ParentStack
-from .bridge import BridgeNeuronGroup
 from .utils import _setup_logger, log, is_distributed, can_use_torch_compile
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .bridge import BridgeNeuronGroup
 
 from typing import Optional
 
@@ -47,6 +50,8 @@ class LocalCircuit(GPUNode):
     """
 
     t: torch.Tensor
+    
+    rank: int
 
     graph_root: CUDAGraphSubTree
     graph: torch.cuda.CUDAGraph
@@ -54,16 +59,19 @@ class LocalCircuit(GPUNode):
 
     bridge: Optional[BridgeNeuronGroup]
 
-    def __init__(self, device):
+    def __init__(self, device, rank: int):
         """Initialize a local circuit on the specified device.
 
         Parameters
         ----------
         device : str or torch.device
             The GPU device for this circuit.
+        rank : int
+            The rank of the GPU for this circuit.
         """
         super().__init__(device)
         self.t = torch.zeros(1, dtype=torch.long, device=self.device)
+        self.rank = rank
         self.graph_root = CUDAGraphSubTree(device=self.device)
         self.graph = torch.cuda.CUDAGraph()
         self.graph_stream = torch.cuda.Stream()
@@ -99,14 +107,12 @@ class LocalCircuit(GPUNode):
         raise NotImplementedError("Not implemented yet.")
 
 
-class SimulatorEngine(Node):
+class Simulator(Node):
     """Main engine for running neural simulations.
 
     The SimulatorEngine is the central controller for the simulation,
     managing timing, GPU allocation, initialization, and stepping.
     It also provides utilities for building and organizing neural networks.
-
-    This is a singleton class - only one instance should exist at a time.
 
     Attributes
     ----------
@@ -120,45 +126,20 @@ class SimulatorEngine(Node):
         Number of available GPUs.
     world_size : int
         Number of processes in the distributed setup.
-    rank : int
-        Rank (process index) in the distributed setup.
     local_circuit : LocalCircuit
         The neural circuit for this GPU.
     """
 
-    t: int
+    #t: int
     n_gpus: int
     world_size: int
-    rank: int
     local_circuit: LocalCircuit
 
-    def __enter__(self):
-        """Context manager entry point.
+    def close(self):
+        """Finish the simulation.
 
-        Initializes the simulator when entering a with block.
-
-        Returns
-        -------
-        SimulatorEngine
-            The initialized simulator instance.
-        """
-        self.initialize()
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        """Context manager exit point.
-
-        Cleans up resources when exiting a with block.
+        Cleans up resources.
         If running in distributed mode, destroys the process group.
-
-        Parameters
-        ----------
-        exc_type : type
-            The type of exception raised, if any.
-        exc_value : Exception
-            The exception raised, if any.
-        traceback : traceback
-            The traceback, if an exception was raised.
         """
         if is_distributed():
             dist.destroy_process_group()
@@ -216,7 +197,7 @@ class SimulatorEngine(Node):
         """
         super().__init__()
 
-        globals.engine = self
+        globals.simulator = self
 
         # Safety checks: Available GPUs
         if not torch.cuda.is_available():  ## Do we have CUDA?
@@ -237,29 +218,23 @@ class SimulatorEngine(Node):
             dist.init_process_group(
                 backend="nccl"
             )  # , init_method="env://") #We assume user will always use `torchrun`
-            self.rank = dist.get_rank()
+            rank = dist.get_rank()
         else:
-            self.rank = 0  # Non-distributed mode
+            rank = 0  # Non-distributed mode
 
-        device = torch.device(f"cuda:{self.rank % self.n_gpus}")
+        device = torch.device(f"cuda:{rank % self.n_gpus}")
         torch.cuda.set_device(device)
         torch.backends.cuda.matmul.allow_tf32 = True
 
-        self.local_circuit = LocalCircuit(device)
+        self.local_circuit = LocalCircuit(device=device, rank=rank)
         self.add_child(self.local_circuit)
 
         # Logger
-        globals.logger = _setup_logger(self.rank)
+        globals.logger = _setup_logger(rank)
 
         # Reproducibility
-        self.set_random_seeds(42 + self.rank)
-
-        # Creates the custom user model
-        log("#################################################################")
-        log("Neurobridge initialized. Building user network...")
-        self.build_user_network(rank=self.rank, world_size=self.world_size, device=device)
-        log("User network built successfully.")
-
+        self.set_random_seeds(42 + rank)
+        
     def set_random_seeds(self, seed):
         """Set random seeds for reproducibility.
 
@@ -293,7 +268,7 @@ class SimulatorEngine(Node):
                 mode="reduce-overhead"  # Opcionalmente "max-autotune" si quieres máxima aceleración
             )
         else:
-            print("torch.compile no compatible con esta GPU, ejecutando sin compilar.")
+            print("torch.compile no compatible con esta GPU o falta triton; ejecutando sin compilar.")
 
         # Warming up the CUDA graph
         self.local_circuit.graph_root._call_ready()
@@ -317,51 +292,3 @@ class SimulatorEngine(Node):
         self.local_circuit.graph.replay()
         self._call_process()
         self.local_circuit.t += 1
-
-    def add_default_bridge(self, n_local_neurons: int, n_steps: int):
-        """Add a default bridge for inter-GPU communication.
-
-        Creates a BridgeNeuronGroup and adds it to the local circuit.
-
-        Parameters
-        ----------
-        n_local_neurons : int
-            Number of bridge neurons per GPU.
-        n_steps : int
-            Number of time steps to collect before synchronizing.
-        """
-        bridge = BridgeNeuronGroup(
-            device=self.local_circuit.device,
-            rank=self.rank,
-            world_size=self.world_size,
-            n_local_neurons=n_local_neurons,
-            n_bridge_steps=n_steps,
-            spatial_dimensions=2,
-            delay_max=n_steps + 1,
-        )
-        self.local_circuit.bridge = bridge
-        self.local_circuit.add_child(bridge)
-
-    def build_user_network(self, rank: int, world_size: int, device: str) -> None:
-        """Build the user-defined neural network.
-
-        This method must be implemented by subclasses to define the
-        specific neural network structure for the simulation.
-
-        Parameters
-        ----------
-        rank : int
-            Rank (process index) in the distributed setup.
-        world_size : int
-            Number of processes in the distributed setup.
-        device : str
-            Device identifier used in this part of the network.
-
-        Raises
-        ------
-        NotImplementedError
-            If not implemented by a subclass.
-        """
-        raise NotImplementedError(
-            "`build_user_network` in `SimulatorEngine` must be implemented."
-        )

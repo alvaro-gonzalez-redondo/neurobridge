@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from . import globals
+
 from .core import ConnectionOperator
 from .group import SpatialGroup
 
@@ -37,7 +38,7 @@ class NeuronGroup(SpatialGroup):
         spatial_dimensions: int = 2,
         delay_max: int = 20,
         n_channels: int = 1,
-        device: str = None,
+        device: torch.device = None,
     ):
         """Initialize a group of neurons.
 
@@ -123,7 +124,7 @@ class NeuronGroup(SpatialGroup):
             Boolean tensor of shape (M,) with the spike status for each neuron.
 
         """
-        t_indices = (globals.engine.local_circuit.t - 1) % self.delay_max
+        t_indices = (globals.simulator.local_circuit.t - 1) % self.delay_max
         return self._spike_buffer[:, t_indices].squeeze_(1)
     
     def get_spikes_at(
@@ -156,7 +157,7 @@ class NeuronGroup(SpatialGroup):
         """
         assert delays.shape == indices.shape, "Delays and indices must match in shape"
 
-        t_indices = (globals.engine.local_circuit.t - delays) % self.delay_max
+        t_indices = (globals.simulator.local_circuit.t - delays) % self.delay_max
         return self._spike_buffer[indices, t_indices]
 
     def __rshift__(self, other) -> ConnectionOperator:
@@ -200,7 +201,7 @@ class ParrotNeurons(NeuronGroup):
         super()._process()
 
         # Clear any remaining spikes
-        t_idx = globals.engine.local_circuit.t % self.delay_max
+        t_idx = globals.simulator.local_circuit.t % self.delay_max
         self._spike_buffer.index_fill_(1, t_idx, 0)
 
         # Process any injected spikes
@@ -288,7 +289,7 @@ class SimpleIFNeurons(NeuronGroup):
         After spiking, the membrane potential is reset to zero.
         """
         super()._process()
-        t_idx = globals.engine.local_circuit.t % self.delay_max
+        t_idx = globals.simulator.local_circuit.t % self.delay_max
 
         # Update potential with decay and input
         self.V *= self.decay
@@ -360,7 +361,7 @@ class RandomSpikeNeurons(NeuronGroup):
         times the time step (in milliseconds).
         """
         super()._process()
-        t_idx = globals.engine.local_circuit.t % self.delay_max
+        t_idx = globals.simulator.local_circuit.t % self.delay_max
 
         self.probabilities.uniform_()
         spikes = self.probabilities < self.firing_rate
@@ -379,6 +380,7 @@ class IFNeurons(NeuronGroup):
     channel_decay_factors: torch.Tensor  # (n_channels, 2)
     channel_normalization: torch.Tensor  # (n_channels,)
     input_channels: torch.Tensor  # (n_neurons, n_channels)
+    _V_reset_buffer: torch.Tensor
 
     def __init__(
         self,
@@ -435,7 +437,7 @@ class IFNeurons(NeuronGroup):
     def _process(self) -> None:
         """Actualiza los estados internos, integra la dinámica y genera spikes."""
         super()._process()
-        t_idx = globals.engine.local_circuit.t % self.delay_max
+        t_idx = globals.simulator.local_circuit.t % self.delay_max
 
         # Actualización de bi-exponenciales
         normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)
@@ -454,5 +456,6 @@ class IFNeurons(NeuronGroup):
         # Generación de spikes
         spikes = (self.V >= self.threshold) | self._input_spikes
         self._spike_buffer.index_copy_(1, t_idx, spikes.unsqueeze(1))
-        torch.where(spikes, self.E_rest.expand_as(self.V), self.V, out=self.V)
+        self._V_reset_buffer.copy_(self.V)
+        torch.where(spikes, self.E_rest.expand_as(self.V), self._V_reset_buffer, out=self.V)
         self._input_spikes.fill_(False)

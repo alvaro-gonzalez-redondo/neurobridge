@@ -13,19 +13,12 @@ import numpy as np
 from tqdm import tqdm
 
 
-class PatternRecognitionExample(SimulatorEngine):
+class PatternRecognitionExample(Simulator):
     """A simulation demonstrating pattern recognition with STDP learning."""
 
-    def build_user_network(self, rank: int, world_size: int):
-        """Build a pattern recognition network.
-
-        Parameters
-        ----------
-        rank : int
-            Current GPU rank (ignored in this single-GPU example).
-        world_size : int
-            Total number of GPUs (ignored in this single-GPU example).
-        """
+    def build_network(self):
+        """Build a pattern recognition network."""
+        
         # Network parameters
         input_size = 100  # Size of the input layer (10x10 grid)
         output_size = 4  # Number of output neurons (one per pattern)

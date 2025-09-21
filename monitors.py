@@ -55,7 +55,7 @@ class SpikeMonitor(Node):
         based on each group's delay_max parameter.
         """
         super()._process()
-        t = globals.engine.local_circuit.t.item()
+        t = globals.simulator.local_circuit.t.item()
         for i, (group, filter) in enumerate(zip(self.groups, self.filters)):
             delay_max = group.delay_max
 
@@ -72,7 +72,7 @@ class SpikeMonitor(Node):
             neuron_ids = neuron_ids[is_filtered]
 
             delay_slots = spike_indices[:, 1][is_filtered]
-            times = globals.engine.local_circuit.t - delay_max + delay_slots +1 #TODO: Check if this +1 is really necessary to avoid negative time values
+            times = globals.simulator.local_circuit.t - delay_max + delay_slots +1 #TODO: Check if this +1 is really necessary to avoid negative time values
 
             spikes_tensor = torch.stack(
                 [neuron_ids, times], dim=1
@@ -269,7 +269,7 @@ class RingBufferSpikeMonitor(Node):
         super()._process()
 
         t = (
-            globals.engine.local_circuit.t
+            globals.simulator.local_circuit.t
         )  # Keep t as tensor for CUDA graph compatibility
 
         for i, (group, mask) in enumerate(zip(self.groups, self.filter_masks)):

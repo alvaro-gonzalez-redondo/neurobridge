@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .core import GPUNode
+from . import globals
 
 from typing import Callable
 
@@ -29,7 +30,7 @@ class Group(GPUNode):
     size: int
     filter: torch.Tensor
 
-    def __init__(self, size: int, device: str = None):
+    def __init__(self, size: int, device: torch.device = None):
         """Initialize a new Group.
 
         Parameters
@@ -96,6 +97,39 @@ class Group(GPUNode):
         clone.filter &= mask
         return clone
 
+    def where_rank(self, rank: int) -> Group:
+        """Filter the group to select neurons from a specific GPU.
+
+        Returns the whole group if rank is current rank, else returns nothing.
+        This method is useful for the bridge, but it is here for compatibility
+        with other neuron groups.
+
+        Parameters
+        ----------
+        rank : int
+            The rank (GPU index) to filter for.
+
+        Returns
+        -------
+        Group
+            A new group with only neurons from the specified rank selected.
+
+        Raises
+        ------
+        ValueError
+            If the rank is out of the valid range.
+
+        Examples
+        --------
+        >>> # Connect to neurons on GPU 1
+        >>> (neurons >> bridge.where_rank(1))(pattern='one-to-one', weight=1.0)
+        """
+        clone = self._clone_with_new_filter()
+        mask_value = rank == globals.simulator.local_circuit.rank
+        clone.filter.fill_(mask_value)
+        
+        return clone
+
     def reset_filter(self) -> None:
         """Reset the filter to select all elements.
 
@@ -122,7 +156,7 @@ class SpatialGroup(Group):
     spatial_dimensions: torch.Tensor
     positions: torch.Tensor
 
-    def __init__(self, size: int, spatial_dimensions: int = 2, device: str = None):
+    def __init__(self, size: int, spatial_dimensions: int = 2, device: torch.device = None):
         """Initialize a new SpatialGroup.
 
         Parameters

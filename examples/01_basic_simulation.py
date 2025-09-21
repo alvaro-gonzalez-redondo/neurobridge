@@ -11,11 +11,11 @@ import torch
 import matplotlib.pyplot as plt
 
 
-class BasicExample(SimulatorEngine):
+class BasicExample(Simulator):
     """A simple example simulation with random and IF neurons."""
     use_dense_connections = False
 
-    def build_user_network(self, rank: int, world_size: int):
+    def build_network(self):
         """Build a simple network of random spike generators connected to IF neurons.
 
         Parameters

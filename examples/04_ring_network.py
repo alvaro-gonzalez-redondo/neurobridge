@@ -16,10 +16,10 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 
-class RingNetworkExample(SimulatorEngine):
+class RingNetworkExample(Simulator):
     """A ring network distributed across multiple GPUs."""
 
-    def build_user_network(self, rank: int, world_size: int):
+    def build_network(self):
         """Build a segment of a ring network on each GPU.
 
         Parameters
@@ -30,7 +30,7 @@ class RingNetworkExample(SimulatorEngine):
             Total number of GPUs.
         """
         # Ensure we have at least 2 GPUs
-        if world_size < 2:
+        if self.world_size < 2:
             log("This example is designed for 2 or more GPUs.")
             log(
                 "It will run on a single GPU, but as a linear chain rather than a ring."
@@ -53,7 +53,7 @@ class RingNetworkExample(SimulatorEngine):
 
             # Connect to the next GPU in the ring
             # (or to the first GPU if this is the last one)
-            next_rank = (rank + 1) % world_size
+            next_rank = (self.local_circuit.rank + 1) % self.world_size
 
             (self.neurons >> bridge.where_rank(next_rank))(
                 pattern="one-to-one", weight=1.0, delay=0
@@ -61,7 +61,7 @@ class RingNetworkExample(SimulatorEngine):
 
             # Connect from the previous GPU in the ring
             # (or from the last GPU if this is the first one)
-            prev_rank = (rank - 1) % world_size
+            prev_rank = (self.local_circuit.rank - 1) % self.world_size
 
             (bridge.where_rank(prev_rank) >> self.neurons)(
                 pattern="one-to-one", weight=1.0, delay=0
@@ -80,7 +80,7 @@ class RingNetworkExample(SimulatorEngine):
             Current simulation step.
         """
         # Only on GPU 0, and only at the beginning
-        if self.rank == 0 and step == 10:
+        if self.local_circuit.rank == 0 and step == 10:
             # Inject a spike to the first neuron
             spikes = torch.zeros(
                 self.neurons.size, dtype=torch.bool, device=self.neurons.device
@@ -102,24 +102,24 @@ class RingNetworkExample(SimulatorEngine):
             # Adjust neuron IDs to show the position in the overall ring
             # by adding an offset based on the GPU rank
             times = spikes[:, 1].cpu()
-            neurons = spikes[:, 0].cpu() + (self.rank * self.neurons.size)
+            neurons = spikes[:, 0].cpu() + (self.local_circuit.rank * self.neurons.size)
 
             plt.scatter(
                 times,
                 neurons,
                 s=10,
-                c=f"C{self.rank}",
+                c=f"C{self.local_circuit.rank}",
                 alpha=0.8,
-                label=f"GPU {self.rank}",
+                label=f"GPU {self.local_circuit.rank}",
             )
 
-        plt.title(f"Spike Propagation in Ring Network - GPU {self.rank}")
+        plt.title(f"Spike Propagation in Ring Network - GPU {self.local_circuit.rank}")
         plt.xlabel("Time (ms)")
         plt.ylabel("Neuron ID (global)")
         plt.legend()
 
         # Save the figure for each GPU
-        show_or_save_plot(f"ring_network_gpu{self.rank}.png", log)
+        show_or_save_plot(f"ring_network_gpu{self.local_circuit.rank}.png", log)
 
 
 # Main program
@@ -130,7 +130,7 @@ if __name__ == "__main__":
     # Create and initialize the simulator
     with RingNetworkExample() as sim:
         # Run the simulation with a progress bar
-        for step in tqdm(range(simulation_length), disable=(sim.rank != 0)):
+        for step in tqdm(range(simulation_length), disable=(sim.local_circuit.rank != 0)):
             # Inject initial spike to start the activity
             sim.inject_initial_spike(step)
 
@@ -144,7 +144,7 @@ if __name__ == "__main__":
                 phase = t % sim.neurons.delay_max
                 spks = buffer[:, phase].squeeze().tolist()
                 spks_str = "".join(["|" if spk else "_" for spk in spks])
-                log(f"GPU {sim.rank}, t={step}: {spks_str}")
+                log(f"GPU {sim.local_circuit.rank}, t={step}: {spks_str}")
 
         # Plot the results
         sim.plot_results()

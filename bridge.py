@@ -114,7 +114,7 @@ class BridgeNeuronGroup(NeuronGroup):
         self._comm_req: Optional[dist.Work] = None
         self._comm_result: Optional[torch.Tensor] = None
 
-    def inject_currents(self, I: torch.Tensor):
+    def inject_currents(self, I: torch.Tensor, chn: int=0):
         """Inject input currents into the bridge neurons.
 
         Bridge neurons will spike in response to any positive input current.
@@ -135,7 +135,7 @@ class BridgeNeuronGroup(NeuronGroup):
         to_id = (self.rank + 1) * self.n_local_neurons
         subset = I[from_id:to_id]  # [n_local_neurons]
 
-        t_mod = globals.engine.local_circuit.t % self.n_bridge_steps
+        t_mod = globals.simulator.local_circuit.t % self.n_bridge_steps
         mask = subset > 0  # [n_local_neurons]
         self._write_buffer.index_copy_(
             1, t_mod, (self._write_buffer.index_select(1, t_mod) | mask.unsqueeze(1))
@@ -161,7 +161,7 @@ class BridgeNeuronGroup(NeuronGroup):
         to_id = (self.rank + 1) * self.n_local_neurons
         subset = spikes[from_id:to_id].bool()
 
-        t_mod = globals.engine.local_circuit.t % self.n_bridge_steps
+        t_mod = globals.simulator.local_circuit.t % self.n_bridge_steps
         mask = subset > 0  # [n_local_neurons]
         self._write_buffer.index_copy_(
             1, t_mod, (self._write_buffer.index_select(1, t_mod) | mask.unsqueeze(1))
@@ -177,7 +177,7 @@ class BridgeNeuronGroup(NeuronGroup):
         """
         super()._process()
 
-        t = globals.engine.local_circuit.t
+        t = globals.simulator.local_circuit.t
         phase = t % self.n_bridge_steps
 
         if is_distributed():
@@ -207,7 +207,7 @@ class BridgeNeuronGroup(NeuronGroup):
                 result = torch.cat(bool_list, dim=0)
 
                 # 6) Set the spikes in the future
-                time_indices = (t + self._time_range + 1) % self.delay_max
+                time_indices = (t + 1 + self._time_range) % self.delay_max
                 self._spike_buffer.index_copy_(1, time_indices, result)
 
                 # 7) Clean handle for the next block
@@ -243,7 +243,7 @@ class BridgeNeuronGroup(NeuronGroup):
         >>> # Connect to neurons on GPU 1
         >>> (neurons >> bridge.where_rank(1))(pattern='one-to-one', weight=1.0)
         """
-        clone = self._clone_with_new_filter()
+        clone:BridgeNeuronGroup = self._clone_with_new_filter()
 
         if rank < 0 or rank >= clone.size // clone.n_local_neurons:
             raise ValueError(f"El rank {rank} está fuera del rango válido.")

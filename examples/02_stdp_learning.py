@@ -13,11 +13,11 @@ import numpy as np
 from tqdm import tqdm
 
 
-class STDPExample(SimulatorEngine):
+class STDPExample(Simulator):
     """Simulation demonstrating STDP learning."""
     use_dense_connections = True
 
-    def build_user_network(self, rank: int, world_size: int):
+    def build_network(self):
         """Build a network with STDP synapses for learning.
 
         Parameters
@@ -149,8 +149,8 @@ class STDPExample(SimulatorEngine):
         plt.plot(x, weight_data)
         plt.grid()
         plt.title("Final Weight Distribution")
-        plt.xlabel("$\Delta t$")
-        plt.ylabel("$\Delta w$")
+        plt.xlabel("$\\Delta t$")
+        plt.ylabel("$\\Delta w$")
         show_or_save_plot("final_weights.png", log)
 
 

@@ -114,8 +114,8 @@ class ConnectionGroup(Group):
 
         self.idx_pre = source_indices
         self.idx_pos = target_indices
-        self.weight = torch.tensor(weight, device=self.pre.device, dtype=torch.float32)
-        self.delay = torch.tensor(delay, device=self.pre.device, dtype=torch.long)
+        self.weight = weight.to(device=self.pre.device, dtype=torch.float32)
+        self.delay = delay.to(device=self.pre.device, dtype=torch.long)
         self.channel = channel
 
         self._current_buffer = torch.zeros(

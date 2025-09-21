@@ -5,9 +5,9 @@ from typing import Optional
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .engine import SimulatorEngine
+    from .engine import Simulator
     import logging
 
 
-engine: Optional[SimulatorEngine] = None
+simulator: Optional[Simulator] = None
 logger: Optional[logging.Logger] = None

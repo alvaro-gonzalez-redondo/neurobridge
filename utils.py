@@ -90,11 +90,24 @@ def is_distributed() -> bool:
 
 
 def can_use_torch_compile() -> bool:
+    # Si no hay CUDA, descartamos
     if not torch.cuda.is_available():
         return False
-    capability = torch.cuda.get_device_capability()
-    # capability = (major, minor), ej: (7, 5) para Turing, (8, 6) para Ampere, (5, 0) en tu caso
-    return capability[0] >= 7
+
+    # Verificar capability mínima (Ampere o superior recomendado)
+    major, minor = torch.cuda.get_device_capability()
+    if major < 7:
+        return False
+
+    # Intentar importar triton
+    try:
+        import triton
+        import triton.language as tl  # forzar comprobación
+    except Exception:
+        return False
+
+    # Si todo bien, podemos usar torch.compile
+    return True
 
 
 def _rgb_escape(r, g, b):

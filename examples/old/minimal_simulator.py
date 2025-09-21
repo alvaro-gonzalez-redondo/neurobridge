@@ -1,13 +1,13 @@
 import torch
-from neurobridge.engine import SimulatorEngine
+from neurobridge.engine import Simulator
 from neurobridge.local_circuit import LocalCircuit
 from neurobridge.neuron_groups.if_neuron_group import IandF
 from neurobridge.synaptic_groups.static_synapse import StaticSynapse
 
 
-class MyEngine(SimulatorEngine):
+class MyEngine(Simulator):
 
-    def build_user_network(self, rank, world_size, device):
+    def build_network(self, rank, world_size, device):
         # Crear circuito
         circuit = LocalCircuit(
             device=device,

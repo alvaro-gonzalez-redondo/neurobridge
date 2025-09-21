@@ -207,7 +207,7 @@ class ConnectionDense(DenseNode):
         Retrieves pre-synaptic spikes with appropriate delays, multiplies by weights,
         and injects the resulting currents into post-synaptic neurons.
         """
-        t_indices = (globals.engine.local_circuit.t - self.delay) % self.pre.delay_max
+        t_indices = (globals.simulator.local_circuit.t - self.delay) % self.pre.delay_max
         spikes_mask = self.pre._spike_buffer[:, t_indices]
         mask_f = spikes_mask.to(self.weight.dtype).squeeze_()
         contrib = torch.matmul(mask_f, self.weight*self.mask)
@@ -386,7 +386,7 @@ class STDPDenseConnection(ConnectionDense):
 
         # Get current spikes with appropriate delays
         # For pre-synaptic neurons, we consider delayed spikes
-        t_indices_pre = (globals.engine.local_circuit.t - self.delay) % self.pre.delay_max
+        t_indices_pre = (globals.simulator.local_circuit.t - self.delay) % self.pre.delay_max
         pre_spikes = self.pre._spike_buffer[:, t_indices_pre].squeeze_()
         
         # For post-synaptic neurons, we consider current spikes (no delay)
