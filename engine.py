@@ -3,6 +3,7 @@ from __future__ import annotations
 from . import globals
 from .core import Node, GPUNode, ParentStack
 from .utils import _setup_logger, log, is_distributed, can_use_torch_compile
+from .group_connections import StaticConnection
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -292,3 +293,149 @@ class Simulator(Node):
         self.local_circuit.graph.replay()
         self._call_process()
         self.local_circuit.t += 1
+
+    def connect(self, pre, pos, 
+                pattern: str = "all_to_all",
+                weight=1.0,
+                delay=1,
+                synapse=None,
+                **kwargs):
+        """
+        Create a connection between populations.
+
+        Parameters
+        ----------
+        pre : NeuronGroup
+            Source population.
+        pos : NeuronGroup
+            Target population.
+        pattern : str, optional
+            Connection pattern: 'all_to_all', 'one_to_one', 'random'.
+        weight : float, tensor or callable
+            Synaptic weight(s).
+        delay : int, tensor or callable
+            Synaptic delay(s).
+        synapse : class, optional
+            Synapse class to instantiate (default: StaticConnection).
+        kwargs : dict
+            Pattern-specific parameters (e.g., p, fanin, fanout).
+
+        Returns
+        -------
+        Connection
+            Connection object.
+        """
+        device = pre.device  # asumimos ambos en mismo device
+
+        # --- 1. Generate mask of connections ---
+        if pattern == "all_to_all":
+            mask = torch.ones((pre.size, pos.size), dtype=torch.bool, device=device)
+
+        elif pattern == "one_to_one":
+            if pre.size != pos.size:
+                raise ValueError("one_to_one requires pre.size == post.size")
+            mask = torch.eye(pre.size, dtype=torch.bool, device=device)
+
+        elif pattern == "random":
+            p = kwargs.get("p", None)
+            fanin = kwargs.get("fanin", None)
+            fanout = kwargs.get("fanout", None)
+
+            if p is not None:
+                # Each pair connected with prob p
+                mask = (torch.rand((pre.size, pos.size), device=device) < p)
+
+            elif fanin is not None:
+                mask = torch.zeros((pre.size, pos.size), dtype=torch.bool, device=device)
+                for j in range(pos.size):
+                    idx = torch.randperm(pre.size, device=device)[:fanin]
+                    mask[idx, j] = True
+
+            elif fanout is not None:
+                mask = torch.zeros((pre.size, pos.size), dtype=torch.bool, device=device)
+                for i in range(pre.size):
+                    idx = torch.randperm(pos.size, device=device)[:fanout]
+                    mask[i, idx] = True
+            else:
+                raise ValueError("random requires one of p, fanin, fanout")
+
+        elif pattern == "distance":
+            # Required args
+            max_distance = kwargs.get("max_distance", None)
+            sigma = kwargs.get("sigma", None)
+            p_max = kwargs.get("p_max", 1.0)
+            fanin = kwargs.get("fanin", None)
+            fanout = kwargs.get("fanout", None)
+            prob_func = kwargs.get("prob_func", None)
+
+            if not hasattr(pre, "positions") or not hasattr(pos, "positions"):
+                raise ValueError("distance pattern requires populations with positions")
+
+            pre_pos = pre.positions.to(device)   # [Npre, dim]
+            pos_pos = pos.positions.to(device) # [Npost, dim]
+
+            # Compute pairwise distances
+            dists = torch.cdist(pre_pos, pos_pos)  # [Npre, Npost]
+
+            if prob_func is not None:
+                # User-defined probability function prob_func(src, tgt)
+                # Vectorized: apply on all pairs
+                pre_exp = pre_pos[:, None, :]  # [Npre, 1, dim]
+                post_exp = pos_pos[None, :, :] # [1, Npost, dim]
+                probs = prob_func(pre_exp, post_exp)
+            else:
+                if sigma is None:
+                    raise ValueError("distance pattern requires either prob_func or sigma")
+                probs = p_max * torch.exp(-(dists**2) / (2 * sigma**2))
+
+            # Apply distance cutoff
+            if max_distance is not None:
+                probs = probs * (dists <= max_distance)
+
+            if fanin is not None:
+                mask = torch.zeros_like(probs, dtype=torch.bool)
+                for j in range(pos.size):
+                    idx = torch.argsort(dists[:, j])[:fanin]
+                    mask[idx, j] = True
+            elif fanout is not None:
+                mask = torch.zeros_like(probs, dtype=torch.bool)
+                for i in range(pre.size):
+                    idx = torch.argsort(dists[i, :])[:fanout]
+                    mask[i, idx] = True
+            else:
+                mask = (torch.rand_like(probs) < probs)
+
+        else:
+            raise NotImplementedError(f"Pattern '{pattern}' not supported yet")
+
+        # --- 2. Generate weights ---
+        if callable(weight):
+            # function of (pre_idx, post_idx)
+            pre_idx, post_idx = mask.nonzero(as_tuple=True)
+            w = weight(pre_idx, post_idx)
+        else:
+            w = torch.full(mask.shape, float(weight), device=device)
+
+        # --- 3. Generate delays ---
+        if callable(delay):
+            pre_idx, post_idx = mask.nonzero(as_tuple=True)
+            d = delay(pre_idx, post_idx)
+        else:
+            d = torch.full(mask.shape, int(delay), device=device)
+
+        # --- 4. Select synapse class ---
+        SynapseClass = synapse or StaticConnection  # usar la que tengas por defecto
+
+        # --- 5. Instantiate connection ---
+        conn = SynapseClass(pre, pos)
+        conn._establish_connection(
+            pattern=pattern,
+            weight=weight,
+            delay=delay,
+            **kwargs
+        )
+
+        # --- 6. Register connection in network ---
+        self.local_circuit.add_child(conn)
+
+        return conn
