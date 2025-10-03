@@ -44,7 +44,7 @@ class BasicExample(Simulator):
             # Connect the source to the target with all-to-all connectivity and random weights
             (self.source >> self.target)(
                 pattern="all-to-all",
-                synapse_class=StaticDenseConnection if self.use_dense_connections else StaticConnection,
+                synapse_class=StaticDense if self.use_dense_connections else StaticSparse,
                 weight=lambda pre, pos: torch.rand(len(pre)) * (3e-3/self.source.size),
                 delay=2,  # 2ms delay
                 channel=0,

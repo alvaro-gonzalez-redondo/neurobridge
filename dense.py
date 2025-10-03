@@ -6,7 +6,7 @@ import copy
 import torch
 
 
-class DenseNode(GPUNode):
+class Dense(GPUNode):
     """Base class for nodes with dense matrix representations."""
     shape: tuple
     filter: torch.Tensor

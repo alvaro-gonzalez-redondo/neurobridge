@@ -2,7 +2,8 @@ import unittest
 import torch
 
 from neurobridge import *
-from neurobridge.core import ParentStack, ConnectionOperator
+from neurobridge.core import ParentStack
+from neurobridge.connection import ConnectionOperator
 from neurobridge.group import Group, SpatialGroup
 from neurobridge.engine import LocalCircuit
 
@@ -321,7 +322,7 @@ class TestSynapses(unittest.TestCase):
         # Test all-to-all connection
         synapses = conn_op(pattern="all-to-all", weight=0.5, delay=1)
 
-        self.assertIsInstance(synapses, StaticConnection)
+        self.assertIsInstance(synapses, StaticSparse)
         self.assertEqual(synapses.size, 10 * 5)  # 10 source neurons * 5 target neurons
         self.assertTrue(torch.all(synapses.weight == 0.5))
         self.assertTrue(torch.all(synapses.delay == 1))
@@ -347,7 +348,7 @@ class TestSynapses(unittest.TestCase):
         # Test function-based weight
         synapses = (self.source >> self.target)(
             pattern="all-to-all",
-            weight=lambda pre, post: torch.ones_like(pre, dtype=torch.float32) * 0.1,
+            weight=lambda pre, pos: torch.ones_like(pre, dtype=torch.float32) * 0.1,
         )
 
         self.assertEqual(synapses.size, 10 * 5)
@@ -361,7 +362,7 @@ class TestSynapses(unittest.TestCase):
         weight = torch.ones(5, device=self.device) * 0.5
         delay = torch.zeros(5, device=self.device, dtype=torch.long)
 
-        synapses = StaticConnection(self.source, self.target)
+        synapses = StaticSparse(self.source, self.target)
         synapses._establish_connection(
             "specific",
             idx_pre=idx_pre,
@@ -394,7 +395,7 @@ class TestSynapses(unittest.TestCase):
         weight = torch.ones(5, device=self.device) * 0.5
         delay = torch.zeros(5, device=self.device, dtype=torch.long)
 
-        synapses = STDPConnection(self.source, self.target)
+        synapses = STDPSparse(self.source, self.target)
         synapses._establish_connection(
             "specific",
             idx_pre=idx_pre,

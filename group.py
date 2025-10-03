@@ -170,7 +170,7 @@ class SpatialGroup(Group):
         """
         super().__init__(size=size, device=device)
         self.spatial_dimensions = torch.tensor(
-            spatial_dimensions, dtype=torch.int32, device=self.device
+            spatial_dimensions, dtype=torch.long, device=self.device
         )
         self.positions = torch.randn(
             (self.size, self.spatial_dimensions), device=self.device

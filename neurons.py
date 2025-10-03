@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Union
+
 from . import globals
 
 from .core import ConnectionOperator
@@ -54,7 +56,7 @@ class NeuronGroup(SpatialGroup):
             Maximum delay in time steps for spike propagation, by default 20.
         """
         super().__init__(n_neurons, spatial_dimensions, device)
-        self.delay_max = torch.tensor([delay_max], dtype=torch.int, device=self.device)
+        self.delay_max = torch.tensor([delay_max], dtype=torch.long, device=self.device)
         self._spike_buffer = torch.zeros(
             (n_neurons, delay_max), dtype=torch.bool, device=self.device
         )
@@ -128,14 +130,15 @@ class NeuronGroup(SpatialGroup):
         return self._spike_buffer[:, t_indices].squeeze_(1)
     
     def get_spikes_at(
-        self, delays: torch.Tensor, indices: torch.Tensor
+        self, delays: Union[int, torch.Tensor], indices: torch.Tensor
     ) -> torch.Tensor:
         """Get the spikes for specific neurons at specific delays.
 
         Parameters
         ----------
-        delays : torch.Tensor
-            Integer tensor of shape (M,) with delay values.
+        delays : int or torch.Tensor
+            - If int: scalar delay applied to all indices.
+            - If Tensor: integer tensor of shape (M,) with per-connection delays.
         indices : torch.Tensor
             Integer tensor of shape (M,) with neuron indices.
 
@@ -148,15 +151,20 @@ class NeuronGroup(SpatialGroup):
         Raises
         ------
         AssertionError
-            If delays and indices don't have the same shape.
+            If delays is a tensor and its shape does not match indices.
 
         Notes
         -----
         This method is used primarily by synaptic connections to retrieve
-        pre-synaptic spikes with appropriate delays.
+        pre-synaptic or post-synaptic spikes with appropriate delays.
         """
-        assert delays.shape == indices.shape, "Delays and indices must match in shape"
+        if isinstance(delays, int):
+            # Escalar: aplicar mismo delay a todas las conexiones
+            t_indices = (globals.simulator.local_circuit.t - delays) % self.delay_max
+            return self._spike_buffer[indices, t_indices]
 
+        # Caso tensorial
+        assert delays.shape == indices.shape, "Delays and indices must match in shape"
         t_indices = (globals.simulator.local_circuit.t - delays) % self.delay_max
         return self._spike_buffer[indices, t_indices]
 

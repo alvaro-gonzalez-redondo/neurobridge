@@ -54,7 +54,7 @@ class SimpleDemo(SimulatorEngine):
             # Connect with random weights
             (source >> target)(
                 pattern="all-to-all",
-                weight=lambda pre, post: torch.rand(len(pre)) * 0.05,
+                weight=lambda pre, pos: torch.rand(len(pre)) * 0.05,
                 delay=1
             )
         

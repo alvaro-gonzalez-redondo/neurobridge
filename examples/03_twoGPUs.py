@@ -3,7 +3,7 @@
 from neurobridge import (
     Simulator, Experiment,
     RandomSpikeNeurons, SimpleIFNeurons,
-    STDPConnection,
+    STDPSparse,
     SpikeMonitor, VariableMonitor,
     show_or_save_plot,
     log, log_error,
@@ -56,9 +56,9 @@ class RandomInputExperiment(Experiment):
                     n_neurons=n_tgt_neurons,
                 )
 
-                stdp_conns: STDPConnection = (bridge.where_rank(0) >> tgt_neurons)(
+                stdp_conns: STDPSparse = (bridge.where_rank(0) >> tgt_neurons)(
                     pattern="all-to-all",
-                    synapse_class=STDPConnection,
+                    synapse_class=STDPSparse,
                     weight=lambda pre, pos: torch.rand(len(pre))
                     * (2.0 / n_src_neurons),
                 )

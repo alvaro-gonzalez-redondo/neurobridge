@@ -53,7 +53,7 @@ class STDPExample(Simulator):
             # Connect with STDP synapses - initially weak random weights
             self.synapses = (self.input_neurons >> self.output_neuron)(
                 pattern="all-to-all",
-                synapse_class=STDPDenseConnection if self.use_dense_connections else STDPConnection,
+                synapse_class=STDPDense if self.use_dense_connections else STDPSparse,
                 weight=self.initial_weight, #lambda i,j: torch.rand(len(i))*0.2,  # Initial weight
                 delay=1,  # 1ms delay
                 A_plus=1e-2*self.initial_weight,  # Potentiation rate

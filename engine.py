@@ -1,22 +1,24 @@
 from __future__ import annotations
 
-from . import globals
-from .core import Node, GPUNode, ParentStack
-from .utils import _setup_logger, log, is_distributed, can_use_torch_compile
-from .group_connections import StaticConnection
-
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .bridge import BridgeNeuronGroup
-
-from typing import Optional
+from typing import Optional, Type, Union, Callable
 
 import os
+from dataclasses import dataclass, field
 
 import torch
 import torch.distributed as dist
 import numpy as np
 import random
+
+from . import globals
+from .core import Node, GPUNode, ParentStack
+from .group import SpatialGroup
+from .utils import _setup_logger, log, is_distributed, can_use_torch_compile, to_tensor, block_distance_connect, resolve_param
+from .sparse_connections import StaticSparse
+from .connection import ConnectionSpec
 
 
 class CUDAGraphSubTree(GPUNode):
@@ -184,7 +186,7 @@ class Simulator(Node):
             raise RuntimeError(f"Invalid autoparent mode: {mode}.")
         return ParentStack(target)
 
-    def __init__(self):
+    def __init__(self, seed=42):
         """Initialize the simulator engine.
 
         Sets up the simulation environment, including GPU detection,
@@ -234,7 +236,7 @@ class Simulator(Node):
         globals.logger = _setup_logger(rank)
 
         # Reproducibility
-        self.set_random_seeds(42 + rank)
+        self.set_random_seeds(seed + rank)
         
     def set_random_seeds(self, seed):
         """Set random seeds for reproducibility.
@@ -294,148 +296,185 @@ class Simulator(Node):
         self._call_process()
         self.local_circuit.t += 1
 
-    def connect(self, pre, pos, 
-                pattern: str = "all_to_all",
-                weight=1.0,
-                delay=1,
-                synapse=None,
-                **kwargs):
+    def connect_edges(
+        self,
+        pre: GPUNode, pos: GPUNode,
+        connection_type: Type[GPUNode],
+        src_idx: torch.LongTensor, tgt_idx: torch.LongTensor,
+        weight: Optional[Union[torch.Tensor, float]] = None,
+        delay: Optional[Union[torch.Tensor, int]] = None,
+        **kwargs,
+    ) -> GPUNode:
+        assert isinstance(pre, GPUNode), f"pre must be GPUNode, got {type(pre)}"
+        assert isinstance(pos, GPUNode), f"pos must be GPUNode, got {type(pos)}"
+
+        # normalize tensors
+        src_idx = to_tensor(src_idx, dtype=torch.long)
+        tgt_idx = to_tensor(tgt_idx, dtype=torch.long)
+        weight  = to_tensor(weight, dtype=torch.float32, device=pre.device)
+        delay   = to_tensor(delay, dtype=torch.long, device=pre.device)
+
+        spec = ConnectionSpec(
+            pre=pre, pos=pos,
+            src_idx=src_idx, tgt_idx=tgt_idx,
+            weight=weight, delay=delay,
+            connection_type=connection_type,
+            params=kwargs,
+        )
+
+        if connection_type is None:
+            raise ValueError("Must provide connection_type")
+
+        # Instanciar la conexión final
+        conn = connection_type(spec)
+        self.local_circuit.add_child(conn)
+        return conn
+    
+
+    def connect(
+        self,
+        pre: Union[GPUNode, SpatialGroup], pos: Union[GPUNode, SpatialGroup],
+        connection_type: Type[GPUNode],
+        pattern: str = "all_to_all",
+        weight: Optional[Union[Callable, torch.Tensor, float]] = 1.0,
+        delay: Optional[Union[Callable, torch.Tensor, int]] = 1,
+        **kwargs,
+    ) -> GPUNode:
         """
-        Create a connection between populations.
+        High-level connect method using patterns.
 
         Parameters
         ----------
-        pre : NeuronGroup
-            Source population.
-        pos : NeuronGroup
-            Target population.
-        pattern : str, optional
-            Connection pattern: 'all_to_all', 'one_to_one', 'random'.
-        weight : float, tensor or callable
+        pre : GPUNode
+            Source group.
+        pos : GPUNode
+            Target group.
+        connection_type : Type[GPUNode]
+            The connection class to instantiate (e.g. SparseStaticConnection).
+        pattern : str
+            Pattern type: 'one_to_one', 'all_to_all', 'random'.
+        weight : scalar or tensor
             Synaptic weight(s).
-        delay : int, tensor or callable
+        delay : scalar or tensor
             Synaptic delay(s).
-        synapse : class, optional
-            Synapse class to instantiate (default: StaticConnection).
         kwargs : dict
-            Pattern-specific parameters (e.g., p, fanin, fanout).
-
-        Returns
-        -------
-        Connection
-            Connection object.
+            Pattern-specific arguments.
         """
-        device = pre.device  # asumimos ambos en mismo device
+        Npre, Npos = pre.size, pos.size
+        device = pre.device
 
-        # --- 1. Generate mask of connections ---
-        if pattern == "all_to_all":
-            mask = torch.ones((pre.size, pos.size), dtype=torch.bool, device=device)
+        if kwargs is None:
+            kwargs = {}
 
-        elif pattern == "one_to_one":
-            if pre.size != pos.size:
-                raise ValueError("one_to_one requires pre.size == post.size")
-            mask = torch.eye(pre.size, dtype=torch.bool, device=device)
+        # --- Pattern handling ---
+        if pattern == "distance":
+            src_idx, tgt_idx = block_distance_connect(
+                pre.positions, pos.positions,
+                block=kwargs.get("block_size", 1024),
+                sigma=kwargs.get("sigma", None),
+                p_max=kwargs.get("p_max", 1.0),
+                max_distance=kwargs.get("max_distance", None),
+                fanin=kwargs.get("fanin", None),
+                fanout=kwargs.get("fanout", None),
+                prob_func=kwargs.get("prob_func", None),
+            )
+        
+        elif pattern == "one-to-one":
+            if Npre != Npos:
+                raise ValueError("one_to_one requires pre.size == pos.size")
+            src_idx = torch.arange(Npre, device=device, dtype=torch.long)
+            tgt_idx = torch.arange(Npos, device=device, dtype=torch.long)
+
+        elif pattern == "all-to-all":
+            src_idx, tgt_idx = torch.meshgrid(
+                torch.arange(Npre, device=device),
+                torch.arange(Npos, device=device),
+                indexing="ij",
+            )
+            src_idx = src_idx.reshape(-1)
+            tgt_idx = tgt_idx.reshape(-1)
 
         elif pattern == "random":
             p = kwargs.get("p", None)
             fanin = kwargs.get("fanin", None)
             fanout = kwargs.get("fanout", None)
 
-            if p is not None:
-                # Each pair connected with prob p
-                mask = (torch.rand((pre.size, pos.size), device=device) < p)
+            if fanin is not None and fanout is not None:
+                total_edges = fanin * Npos
+                if total_edges != fanout * Npre:
+                    raise ValueError(
+                        f"Inconsistent fanin/fanout: fanin*Npos={fanin*Npos} != fanout*Npre={fanout*Npre}"
+                    )
+
+                # Inicializamos contadores de cuántas conexiones lleva cada pre/post
+                pre_remaining  = torch.full((Npre,),  fanout, dtype=torch.int32, device=device)
+                post_remaining = torch.full((Npos,), fanin,  dtype=torch.int32, device=device)
+
+                src_list, tgt_list = [], []
+
+                # Mientras quede demanda de posts
+                for j in torch.randperm(Npos, device=device):
+                    need = post_remaining[j].item()
+                    if need <= 0:
+                        continue
+                    # Candidatos disponibles en pres con hueco
+                    candidates = (pre_remaining > 0).nonzero(as_tuple=True)[0]
+                    if len(candidates) < need:
+                        raise RuntimeError("No hay suficientes pres disponibles para cumplir restricciones")
+                    chosen = candidates[torch.randperm(len(candidates), device=device)[:need]]
+                    src_list.append(chosen)
+                    tgt_list.append(torch.full((need,), j, device=device))
+                    pre_remaining[chosen] -= 1
+                    post_remaining[j] = 0
+
+                src_idx = torch.cat(src_list)
+                tgt_idx = torch.cat(tgt_list)
+
+            elif p is not None:
+                # Caso 1: probabilidad por par
+                mask = (torch.rand((Npre, Npos), device=device) < p)
+                src_idx, tgt_idx = mask.nonzero(as_tuple=True)
 
             elif fanin is not None:
-                mask = torch.zeros((pre.size, pos.size), dtype=torch.bool, device=device)
-                for j in range(pos.size):
-                    idx = torch.randperm(pre.size, device=device)[:fanin]
-                    mask[idx, j] = True
+                # Caso 2: cada postsináptica recibe exactamente `fanin` conexiones aleatorias
+                if fanin > Npre:
+                    raise ValueError("fanin cannot exceed number of presynaptic neurons")
+                # Para cada columna (target), escoger fanin pres al azar
+                rand = torch.rand((Npre, Npos), device=device)
+                idx = torch.topk(rand, k=fanin, dim=0).indices  # [fanin, Npos]
+                tgt_idx = torch.arange(Npos, device=device).repeat(fanin, 1)
+                src_idx = idx
+                src_idx, tgt_idx = src_idx.reshape(-1), tgt_idx.reshape(-1)
 
             elif fanout is not None:
-                mask = torch.zeros((pre.size, pos.size), dtype=torch.bool, device=device)
-                for i in range(pre.size):
-                    idx = torch.randperm(pos.size, device=device)[:fanout]
-                    mask[i, idx] = True
-            else:
-                raise ValueError("random requires one of p, fanin, fanout")
-
-        elif pattern == "distance":
-            # Required args
-            max_distance = kwargs.get("max_distance", None)
-            sigma = kwargs.get("sigma", None)
-            p_max = kwargs.get("p_max", 1.0)
-            fanin = kwargs.get("fanin", None)
-            fanout = kwargs.get("fanout", None)
-            prob_func = kwargs.get("prob_func", None)
-
-            if not hasattr(pre, "positions") or not hasattr(pos, "positions"):
-                raise ValueError("distance pattern requires populations with positions")
-
-            pre_pos = pre.positions.to(device)   # [Npre, dim]
-            pos_pos = pos.positions.to(device) # [Npost, dim]
-
-            # Compute pairwise distances
-            dists = torch.cdist(pre_pos, pos_pos)  # [Npre, Npost]
-
-            if prob_func is not None:
-                # User-defined probability function prob_func(src, tgt)
-                # Vectorized: apply on all pairs
-                pre_exp = pre_pos[:, None, :]  # [Npre, 1, dim]
-                post_exp = pos_pos[None, :, :] # [1, Npost, dim]
-                probs = prob_func(pre_exp, post_exp)
-            else:
-                if sigma is None:
-                    raise ValueError("distance pattern requires either prob_func or sigma")
-                probs = p_max * torch.exp(-(dists**2) / (2 * sigma**2))
-
-            # Apply distance cutoff
-            if max_distance is not None:
-                probs = probs * (dists <= max_distance)
-
-            if fanin is not None:
-                mask = torch.zeros_like(probs, dtype=torch.bool)
-                for j in range(pos.size):
-                    idx = torch.argsort(dists[:, j])[:fanin]
-                    mask[idx, j] = True
-            elif fanout is not None:
-                mask = torch.zeros_like(probs, dtype=torch.bool)
-                for i in range(pre.size):
-                    idx = torch.argsort(dists[i, :])[:fanout]
-                    mask[i, idx] = True
-            else:
-                mask = (torch.rand_like(probs) < probs)
+                # Caso 3: cada presináptica conecta a exactamente `fanout` posts al azar
+                if fanout > Npos:
+                    raise ValueError("fanout cannot exceed number of postsynaptic neurons")
+                rand = torch.rand((Npre, Npos), device=device)
+                idx = torch.topk(rand, k=fanout, dim=1).indices  # [Npre, fanout]
+                src_idx = torch.arange(Npre, device=device).unsqueeze(1).repeat(1, fanout)
+                tgt_idx = idx
+                src_idx, tgt_idx = src_idx.reshape(-1), tgt_idx.reshape(-1)
 
         else:
-            raise NotImplementedError(f"Pattern '{pattern}' not supported yet")
+            raise ValueError(f"Unsupported connection pattern: {pattern}")
+        
+        # --- Resolve params ---
 
-        # --- 2. Generate weights ---
-        if callable(weight):
-            # function of (pre_idx, post_idx)
-            pre_idx, post_idx = mask.nonzero(as_tuple=True)
-            w = weight(pre_idx, post_idx)
-        else:
-            w = torch.full(mask.shape, float(weight), device=device)
+        weight = resolve_param(weight, src_idx=src_idx, tgt_idx=tgt_idx, src=pre, tgt=pos, default_val=kwargs.get('default_weight', 0.0), dtype=torch.float32)
+        delay = resolve_param(delay, src_idx=src_idx, tgt_idx=tgt_idx, src=pre, tgt=pos, default_val=kwargs.get('default_delay', 1), dtype=torch.long)
 
-        # --- 3. Generate delays ---
-        if callable(delay):
-            pre_idx, post_idx = mask.nonzero(as_tuple=True)
-            d = delay(pre_idx, post_idx)
-        else:
-            d = torch.full(mask.shape, int(delay), device=device)
 
-        # --- 4. Select synapse class ---
-        SynapseClass = synapse or StaticConnection  # usar la que tengas por defecto
-
-        # --- 5. Instantiate connection ---
-        conn = SynapseClass(pre, pos)
-        conn._establish_connection(
-            pattern=pattern,
+        # --- Delegate to connect_edges ---
+        conn = self.connect_edges(
+            pre=pre,
+            pos=pos,
+            connection_type=connection_type,
+            src_idx=src_idx,
+            tgt_idx=tgt_idx,
             weight=weight,
             delay=delay,
-            **kwargs
+            kwargs=kwargs,
         )
-
-        # --- 6. Register connection in network ---
-        self.local_circuit.add_child(conn)
 
         return conn

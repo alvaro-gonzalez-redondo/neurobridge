@@ -4,7 +4,7 @@ from tqdm import tqdm
 from neurobridge import (
     Simulator, Experiment,
     RandomSpikeNeurons, SimpleIFNeurons,
-    STDPConnection,
+    STDPSparse,
     SpikeMonitor, VariableMonitor,
     show_or_save_plot,
     log, log_error,
@@ -27,8 +27,8 @@ class RandomInputExperiment(Experiment):
 
             stdp_conns = (src_neurons >> tgt_neurons)(
                 pattern="all-to-all",
-                synapse_class=STDPConnection,
-                weight=lambda pre, pos: torch.rand(len(pre)) * 1.9e-3,
+                synapse_class=STDPSparse,
+                weight=lambda src_idx, tgt_idx, src_sel, tgt_sel: torch.rand(src_idx.numel()) * 1.9e-3,
             )
 
         with self.sim.autoparent("normal"):

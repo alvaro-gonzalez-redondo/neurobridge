@@ -3,8 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .neurons import NeuronGroup
-
-from typing import Optional, Any, Type, List
+from typing import Optional, Type, Any
 
 import contextlib
 import contextvars
@@ -72,7 +71,7 @@ class ParentStack(contextlib.AbstractContextManager):
         return False  # do not supress exceptions
 
     @staticmethod
-    def current_parent() -> Optional[Node]:
+    def current_parent() -> Optional[GPUNode]:
         """Get the current parent node from the stack.
 
         Returns
@@ -220,45 +219,7 @@ class GPUNode(Node):
 
 
 class ConnectionOperator:
-    """Handles the creation of synaptic connections between neuron groups.
-
-    This class is created when using the >> operator between neuron groups
-    and provides methods to specify connection parameters and patterns.
-
-    Attributes
-    ----------
-    pre : NeuronGroup
-        The pre-synaptic (source) neuron group.
-    pos : NeuronGroup
-        The post-synaptic (target) neuron group.
-    device : torch.device
-        The GPU device shared by both neuron groups.
-    pattern : Optional[str]
-        The connection pattern to use (e.g., 'all-to-all', 'one-to-one').
-    kwargs : dict
-        Additional connection parameters.
-    """
-
-    pre: NeuronGroup
-    pos: NeuronGroup
-    pattern: Optional[str]
-    kwargs: dict[str, Any]
-
     def __init__(self, pre: NeuronGroup, pos: NeuronGroup) -> None:
-        """Initialize a connection operator between two neuron groups.
-
-        Parameters
-        ----------
-        pre : NeuronGroup
-            The pre-synaptic (source) neuron group.
-        pos : NeuronGroup
-            The post-synaptic (target) neuron group.
-
-        Raises
-        ------
-        RuntimeError
-            If the pre-synaptic and post-synaptic groups are on different devices.
-        """
         if pre.device != pos.device:
             raise RuntimeError(
                 "It is not possible to directly connect two populations in different GPUs."
@@ -266,8 +227,6 @@ class ConnectionOperator:
         self.pre = pre
         self.pos = pos
         self.device = self.pre.device
-        self.pattern = None
-        self.kwargs = {}
 
     def __call__(
         self,
@@ -275,70 +234,26 @@ class ConnectionOperator:
         synapse_class: Optional[Type[GPUNode]] = None,
         **kwargs: Any,
     ) -> GPUNode:
-        """Create a synaptic connection between the neuron groups.
+        """Create a synaptic connection using the simulator's connect method."""
+        from . import globals
+        from .sparse_connections import StaticSparse
 
-        Parameters
-        ----------
-        pattern : str, optional
-            The connection pattern to use, by default 'all-to-all'.
-            Supported patterns:
-                - 'all-to-all': Connect every pre-synaptic neuron to every
-                  post-synaptic neuron.
-                - 'one-to-one': Connect pre-synaptic neurons to post-synaptic
-                  neurons one-to-one (requires equal number of neurons).
-                - 'specific': Connect using provided indices (requires 'idx_pre'
-                  and 'idx_pos' in kwargs).
-        synapse_class : Optional[Type[SynapseGroup]], optional
-            The class to use for the synaptic connections, by default None.
-            If None, StaticSynapse is used.
-        **kwargs : Any
-            Additional connection parameters, including:
-                - weight: Synaptic weights (scalar, tensor, or function).
-                - delay: Synaptic delays in time steps (scalar, tensor, or function).
-                - Additional parameters specific to the synapse class.
+        if globals.simulator is None:
+            raise RuntimeError("No active Simulator found. Make sure to instantiate Simulator().")
 
-        Returns
-        -------
-        SynapseGroup
-            The created synaptic connection group.
+        # default: static sparse connection
+        synapse_class = StaticSparse if synapse_class is None else synapse_class
 
-        Raises
-        ------
-        NotImplementedError
-            If an unsupported connection pattern is specified.
-        RuntimeError
-            If required parameters for a specific pattern are missing.
-
-        Notes
-        -----
-        After the connection is created, the filters of both pre-synaptic and
-        post-synaptic groups are reset.
-
-        Examples
-        --------
-        >>> # All-to-all connection with fixed weight and delay
-        >>> (pre_group >> post_group)(pattern='all-to-all', weight=0.1, delay=1)
-        >>>
-        >>> # One-to-one connection with plastic synapses
-        >>> (pre_group >> post_group)(
-        ...     pattern='one-to-one',
-        ...     synapse_class=STDPSynapse,
-        ...     weight=0.5,
-        ...     A_plus=0.01
-        ... )
-        """
-        from .group_connections import StaticConnection
-        synapse_class = StaticConnection if synapse_class is None else synapse_class
-
-        connection = synapse_class(
+        # delegate creation to Simulator
+        connection = globals.simulator.connect(
             pre=self.pre,
             pos=self.pos,
+            pattern=pattern,
+            connection_type=synapse_class,
+            **kwargs,
         )
 
-        connection._establish_connection(pattern, **kwargs)
-        connection._init_connection(**kwargs)
-
-        # Limpiar filtros tras conectar
+        # reset filters
         self.pre.reset_filter()
         self.pos.reset_filter()
 

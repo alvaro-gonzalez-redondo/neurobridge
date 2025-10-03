@@ -41,8 +41,8 @@ class PatternRecognitionExample(Simulator):
             # Connect input to output with STDP synapses
             self.synapses = (self.input_layer >> self.output_layer)(
                 pattern="all-to-all",
-                synapse_class=STDPConnection,
-                weight=lambda pre, post: torch.rand(len(pre))
+                synapse_class=STDPSparse,
+                weight=lambda pre, pos: torch.rand(len(pre))
                 * 0.1,  # Random initial weights
                 delay=1,
                 A_plus=0.02,  # Potentiation rate
@@ -57,9 +57,9 @@ class PatternRecognitionExample(Simulator):
             # (when one output neuron fires, it inhibits the others)
             self.lateral_inhibition = (self.output_layer >> self.output_layer)(
                 pattern="all-to-all",
-                synapse_class=StaticConnection,
-                weight=lambda pre, post: torch.where(
-                    pre.unsqueeze(1) == post.unsqueeze(0),  # Diagonal mask
+                synapse_class=StaticSparse,
+                weight=lambda pre, pos: torch.where(
+                    pre.unsqueeze(1) == pos.unsqueeze(0),  # Diagonal mask
                     torch.zeros(len(pre), device=self.local_circuit.device),
                     torch.ones(len(pre), device=self.local_circuit.device) * -0.5,
                 ),

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from . import globals
 
@@ -17,65 +17,6 @@ import matplotlib
 from matplotlib import pyplot as plt
 
 from scipy.ndimage import gaussian_filter1d
-
-
-def _compute_parameter(
-    param: Any, idx_pre: torch.Tensor, idx_post: torch.Tensor, device: str
-) -> torch.Tensor:
-    """Compute per-connection parameter values based on various input types.
-
-    Parameters
-    ----------
-    param : Any
-        The parameter specification, which can be:
-            - A scalar: Used for all connections.
-            - A tensor: Used directly if it matches the number of connections.
-            - A list: Converted to a tensor.
-            - A function: Called with (idx_pre, idx_post) to compute values.
-    idx_pre : torch.Tensor
-        Indices of pre-synaptic neurons for each connection.
-    idx_post : torch.Tensor
-        Indices of post-synaptic neurons for each connection.
-
-    Returns
-    -------
-    torch.Tensor
-        Tensor of parameter values for each connection.
-
-    Raises
-    ------
-    ValueError
-        If the tensor dimensions don't match the number of connections.
-    TypeError
-        If a function parameter doesn't return a tensor.
-    """
-    n = len(idx_pre)
-
-    if callable(param):
-        values = param(idx_pre, idx_post)
-        if not isinstance(values, torch.Tensor):
-            raise TypeError("Functions must return a tensor.")
-        if values.shape[0] != n:
-            raise ValueError(
-                f"Returned tensor must have size {n}, but it has size {values.shape[0]}."
-            )
-        return values.to(device=device)
-
-    elif isinstance(param, torch.Tensor):
-        if param.numel() == 1:
-            return torch.full((n,), param.item(), device=device)
-        if param.numel() != n:
-            raise ValueError(
-                f"Expected a tensor of length {n}, got {param.numel()}."
-            )
-        return param.to(device=device)
-
-    elif isinstance(param, list):
-        param = torch.tensor(param, device=device)
-        return _compute_parameter(param, idx_pre, idx_post, device)
-
-    else:  # Scalar
-        return torch.full((n,), float(param), device=device)
 
 
 def is_distributed() -> bool:
@@ -333,7 +274,7 @@ def smooth_spikes(spk_times, n_neurons=1, from_time=0.0, to_time=1.0, sigma=5):
     bin_size = 1  # en pasos de simulación
 
     # Histograma global
-    spike_counts = torch.bincount(spk_times.to(torch.int64), minlength=duration)
+    spike_counts = torch.bincount(spk_times.to(torch.long), minlength=duration)
     rate = spike_counts.numpy() / num_neurons / (bin_size * dt / 1000)  # en Hz
 
     # Suavizado
@@ -341,3 +282,133 @@ def smooth_spikes(spk_times, n_neurons=1, from_time=0.0, to_time=1.0, sigma=5):
     smoothed_rate = gaussian_filter1d(rate, sigma=sigma)
 
     return time, smoothed_rate
+
+
+def to_tensor(x, dtype, device=None):
+    if x is None:
+        return None
+    if torch.is_tensor(x):
+        return x.to(dtype=dtype, device=device)
+    return torch.tensor(x, dtype=dtype, device=device)
+
+
+def resolve_param(param:Any, src_idx:torch.Tensor, tgt_idx:torch.Tensor, src:torch.Tensor, tgt:torch.Tensor, default_val:Any, dtype:Any):
+    device = src.device
+    if callable(param):
+        src_pos = getattr(src,"positions",None)
+        tgt_pos = getattr(tgt,"positions",None)
+        src_sel = src_pos[src_idx] if src_pos is not None else None
+        tgt_sel = tgt_pos[tgt_idx] if tgt_pos is not None else None
+        out = param(src_idx, tgt_idx, src_sel, tgt_sel)
+        return out.to(device=device, dtype=dtype)
+    elif torch.is_tensor(param):
+        return param.to(device=device,dtype=dtype)
+    elif param is None:
+        return torch.full((src_idx.numel(),), default_val, device=device, dtype=dtype)
+    else:
+        return torch.full((src_idx.numel(),), float(param), device=device, dtype=dtype)
+
+
+def block_distance_connect(
+    src_pos: torch.Tensor,
+    tgt_pos: torch.Tensor,
+    *,
+    sigma: float | None = None,
+    p_max: float = 1.0,
+    max_distance: float | None = None,
+    fanin: int | None = None,
+    fanout: int | None = None,
+    prob_func = None,  # callable(pre_block, pos_all, dists_block) -> probs_block
+    block_src: int = 2048,
+    block_tgt: int = 2048,
+) -> tuple[torch.LongTensor, torch.LongTensor]:
+    """
+    Devuelve (src_idx, tgt_idx) según conectividad 'distance' evitando construir la matriz Npre×Npos completa.
+
+    Modos (mutuamente excluyentes):
+      - Probabilístico: usa sigma/p_max o prob_func (pre_block, pos_all, dists_block) -> [B, Npos].
+      - fanin: K vecinos más cercanos por target (itera por bloques de targets).
+      - fanout: K vecinos más cercanos por source (itera por bloques de sources).
+    """
+    device = src_pos.device
+    Nsrc, Ntgt = src_pos.shape[0], tgt_pos.shape[0]
+
+    # Exclusividad de modos
+    modes = [m is not None for m in (fanin, fanout, sigma or prob_func)]
+    if sum(modes) != 1:
+        raise ValueError("distance: especifica exactamente uno de {probabilístico (sigma/prob_func), fanin, fanout}")
+
+    src_parts: list[torch.Tensor] = []
+    tgt_parts: list[torch.Tensor] = []
+
+    INF = torch.finfo(src_pos.dtype).max
+
+    if fanin is not None:
+        if fanin > Nsrc:
+            raise ValueError("fanin no puede exceder pre.size")
+        # Itera por bloques de targets (pos)
+        for j0 in range(0, Ntgt, block_tgt):
+            j1 = min(j0 + block_tgt, Ntgt)
+            tgt_block = tgt_pos[j0:j1]                           # [Bpos, D]
+            dists = torch.cdist(src_pos, tgt_block)               # [Npre, Bpos]
+            if max_distance is not None:
+                dists = dists.masked_fill_(dists > max_distance, INF)
+            vals, idx = torch.topk(dists, k=fanin, dim=0, largest=False)  # [fanin, Bpos]
+            # Filtra entradas inválidas (INF si no hay suficientes dentro del radio)
+            valid = vals.isfinite()                                # [fanin, Bpos]
+            if valid.any():
+                col_idx = torch.arange(j0, j1, device=device).repeat(fanin, 1)
+                src = idx[valid]
+                tgt = col_idx[valid]
+                src_parts.append(src.reshape(-1))
+                tgt_parts.append(tgt.reshape(-1))
+
+    elif fanout is not None:
+        if fanout > Ntgt:
+            raise ValueError("fanout no puede exceder pos.size")
+        # Itera por bloques de sources (pre)
+        for i0 in range(0, Nsrc, block_src):
+            i1 = min(i0 + block_src, Nsrc)
+            src_block = src_pos[i0:i1]                             # [Bpre, D]
+            dists = torch.cdist(src_block, tgt_pos)               # [Bpre, Npos]
+            if max_distance is not None:
+                dists = dists.masked_fill_(dists > max_distance, INF)
+            vals, idx = torch.topk(dists, k=fanout, dim=1, largest=False)  # [Bpre, fanout]
+            valid = vals.isfinite()                                # [Bpre, fanout]
+            if valid.any():
+                row_idx = torch.arange(i0, i1, device=device).unsqueeze(1).repeat(1, fanout)
+                src = row_idx[valid]
+                tgt = idx[valid]
+                src_parts.append(src.reshape(-1))
+                tgt_parts.append(tgt.reshape(-1))
+
+    else:
+        # Modo probabilístico (sigma/p_max o prob_func)
+        if prob_func is None and sigma is None:
+            raise ValueError("distance probabilístico: define sigma o prob_func")
+        for i0 in range(0, Nsrc, block_src):
+            i1 = min(i0 + block_src, Nsrc)
+            src_block = src_pos[i0:i1]                             # [Bpre, D]
+            dists = torch.cdist(src_block, tgt_pos)               # [Bpre, Npos]
+            if prob_func is not None:
+                # El prob_func debe devolver matriz de probabilidades [Bpre, Npos]
+                probs = prob_func(src_block, tgt_pos, dists)
+            else:
+                # Gaussiana p(d) = p_max * exp(-d^2 / (2 sigma^2))
+                probs = p_max * torch.exp(-(dists**2) / (2.0 * (sigma**2)))
+            if max_distance is not None:
+                probs = probs * (dists <= max_distance)
+
+            # Muestreo Bernoulli por bloque
+            mask = torch.rand_like(probs) < probs                  # [Bpre, Npos]
+            if mask.any():
+                src, tgt = mask.nonzero(as_tuple=True)             # locales al bloque
+                src_parts.append(src + i0)
+                tgt_parts.append(tgt)
+
+    if not src_parts:
+        # Sin conexiones
+        return (torch.empty(0, dtype=torch.long, device=device),
+                torch.empty(0, dtype=torch.long, device=device))
+
+    return torch.cat(src_parts), torch.cat(tgt_parts)

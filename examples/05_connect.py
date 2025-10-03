@@ -1,7 +1,4 @@
 import torch
-from matplotlib import pyplot as plt
-from tqdm import tqdm
-
 from neurobridge import *
 
 class SimpleNetwork(Experiment):
@@ -13,13 +10,21 @@ class SimpleNetwork(Experiment):
             self.n1 = ParrotNeurons(n_neurons)
             self.n2 = ParrotNeurons(n_neurons)
 
-            self.sim.connect(self.n1, self.n2, 
+            self.sim.connect(self.n1, self.n2, StaticSparse,
                 pattern="random",
                 delay=1,
                 weight=1,
-                p=0.1
-                #fanin=n_neurons//2
-                #fanout=n_neurons//2
+                #p=0.2,
+                fanin=1,#n_neurons//2,
+                fanout=1,#n_neurons//2,
+            )
+            self.sim.connect(self.n2, self.n1, StaticSparse,
+                pattern="random",
+                delay=1,
+                weight=1,
+                #p=0.2,
+                fanin=1,#n_neurons//2,
+                fanout=1,#n_neurons//2,
             )
         
         with self.sim.autoparent("normal"):
@@ -42,6 +47,12 @@ class SimpleNetwork(Experiment):
         phase = (self.time-1) % self.n1.delay_max
         spks = spk_buf[:, phase].squeeze().tolist()
         spks_str = "".join(["|" if spk else "_" for spk in spks])
+
+        spk_buf = self.n2.get_spike_buffer()
+        phase = (self.time-1) % self.n2.delay_max
+        spks = spk_buf[:, phase].squeeze().tolist()
+        spks_str += " - " + "".join(["|" if spk else "_" for spk in spks])
+        
         log(f"t={self.time:<5}: {spks_str}")
     
 
@@ -49,6 +60,7 @@ class SimpleNetwork(Experiment):
         #monitor: SpikeMonitor = self.spike_monitor
         pass
 
+
 if __name__ == "__main__":
-    exp = SimpleNetwork(sim=Simulator())
+    exp = SimpleNetwork(sim=Simulator(seed=1))
     exp.run(steps=100)
