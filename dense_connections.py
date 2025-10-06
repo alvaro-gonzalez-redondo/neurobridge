@@ -141,6 +141,7 @@ class STDPDense(StaticDense):
     tau_minus: torch.Tensor
     w_min: torch.Tensor
     w_max: torch.Tensor
+    oja_decay: torch.Tensor
     x_pre: torch.Tensor
     x_pos: torch.Tensor
     alpha_pre: torch.Tensor
@@ -154,12 +155,13 @@ class STDPDense(StaticDense):
         params = spec.params
 
         # STDP parameters
-        self.A_plus = torch.tensor(params.get("A_plus", 1e-2), device=device)
-        self.A_minus = torch.tensor(params.get("A_minus", 1.2e-2), device=device)
+        self.A_plus = torch.tensor(params.get("A_plus", 1e-4), device=device)
+        self.A_minus = torch.tensor(params.get("A_minus", -1.2e-4), device=device)
         self.tau_plus = torch.tensor(params.get("tau_plus", 20e-3), device=device)
         self.tau_minus = torch.tensor(params.get("tau_minus", 20e-3), device=device)
         self.w_min = torch.tensor(params.get("w_min", 0.0), device=device)
         self.w_max = torch.tensor(params.get("w_max", 1.0), device=device)
+        self.oja_decay = torch.tensor(spec.params.get("oja_decay", 1e-5), device=self.device)
 
         # Traces
         self.x_pre = torch.zeros(self.pre.size, dtype=torch.float32, device=device)
@@ -188,7 +190,9 @@ class STDPDense(StaticDense):
         potentiation = torch.outer(pre_spikes, self.x_pos) * self.A_plus
         # Depression: pre traces × pos spikes
         depression = torch.outer(self.x_pre, pos_spikes) * self.A_minus
+        # Homeostasis: Oja's normalization rule
+        homeostasis = self.x_pos*self.x_pos * self.weight * self.oja_decay
 
         # Apply update only where connections exist
-        self.weight += (potentiation + depression) * self.mask
+        self.weight += (potentiation + depression - homeostasis) * self.mask
         self.weight.clamp_(self.w_min, self.w_max)

@@ -266,20 +266,47 @@ def show_or_save_plot(filename="output.png", log=None):
             print(f"Plot saved as '{filename}'")
 
 
-def smooth_spikes(spk_times, n_neurons=1, from_time=0.0, to_time=1.0, sigma=5):
-    # Parámetros
-    dt = 1.0  # tamaño del paso de simulación en ms
-    duration = int(to_time - from_time)
-    num_neurons = n_neurons
+def smooth_spikes(spk_times, n_neurons=1, from_step=0, to_step=1, dt=1e-3, sigma=0.1):
+    """
+    Calcula la tasa de disparo suavizada de una población neuronal.
+    
+    Parámetros:
+    -----------
+    spk_times : torch.Tensor
+        Índices de tiempo de disparo (en pasos de simulación, no en segundos).
+    n_neurons : int
+        Número total de neuronas de la población.
+    from_step, to_step : int
+        Rango de pasos de simulación a considerar.
+    dt : float
+        Tamaño del paso temporal en segundos.
+    sigma : float
+        Desviación estándar del suavizado gaussiano en segundos.
+
+    Retorna:
+    --------
+    time : np.ndarray
+        Vector temporal en segundos.
+    smoothed_rate : np.ndarray
+        Tasa de disparo suavizada en Hz.
+    """
+    n_steps = int(to_step - from_step)
     bin_size = 1  # en pasos de simulación
 
-    # Histograma global
-    spike_counts = torch.bincount(spk_times.to(torch.long), minlength=duration)
-    rate = spike_counts.numpy() / num_neurons / (bin_size * dt / 1000)  # en Hz
+    # Filtrado de spikes fuera del rango
+    valid = (spk_times >= 0) & (spk_times < n_steps)
+    spk_times = spk_times[valid].to(torch.long)
 
-    # Suavizado
-    time = np.arange(duration) * dt
-    smoothed_rate = gaussian_filter1d(rate, sigma=sigma)
+    # Histograma global
+    spike_counts = torch.bincount(spk_times, minlength=n_steps)
+    rate = spike_counts.cpu().numpy() / (n_neurons * bin_size * dt)  # en Hz
+
+    # Suavizado gaussiano
+    sigma_bins = (sigma * 1e3) / (dt * 1e3)  # conversión de ms a bins
+    smoothed_rate = gaussian_filter1d(rate, sigma=sigma_bins)
+
+    # Eje temporal en segundos
+    time = np.arange(n_steps) * dt
 
     return time, smoothed_rate
 

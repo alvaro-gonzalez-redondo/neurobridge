@@ -8,6 +8,7 @@ from .neurons import NeuronGroup
 from typing import List, Dict
 
 import torch
+import re
 
 
 class SpikeMonitor(Node):
@@ -92,7 +93,7 @@ class SpikeMonitor(Node):
         Returns
         -------
         torch.Tensor
-            Tensor of shape [N_total_spikes, 2] with columns (neuron_id, time).
+            Tensor of shape [N_total_spikes, 2] with columns (neuron_id, time_step).
             If no spikes were recorded, returns an empty tensor of shape (0, 2).
         """
         device = self.groups[group_index].device if not to_cpu else "cpu"
@@ -147,35 +148,45 @@ class VariableMonitor(Node):
             {var_name: [] for var_name in variable_names} for _ in groups
         ]
 
+
     def _process(self):
-        """Process the monitor for the current time step.
-
-        Records the current values of the specified variables for each monitored
-        group, applying the appropriate filters.
-
-        Raises
-        ------
-        AttributeError
-            If a group does not have a specified variable.
-        TypeError
-            If a monitored variable is not a torch.Tensor.
-        """
         super()._process()
-        for i, (group, filter) in enumerate(zip(self.groups, self.filters)):
+        for i, (group, filt) in enumerate(zip(self.groups, self.filters)):
             for var_name in self.variable_names:
-                value = getattr(group, var_name, None)
+                # --- detectar patrón "variable@índice" ---
+                match = re.match(r"^([\w\.]+)@(\d+)$", var_name)
+                if match:
+                    base_name, sub_index = match.group(1), int(match.group(2))
+                else:
+                    base_name, sub_index = var_name, None
+
+                # --- obtener la variable ---
+                value = getattr(group, base_name, None)
                 if value is None:
                     raise AttributeError(
-                        f"Group {i} does not have variable '{var_name}'."
+                        f"Group {i} does not have variable '{base_name}'."
                     )
-
                 if not isinstance(value, torch.Tensor):
                     raise TypeError(
-                        f"Monitored variable '{var_name}' is not a torch.Tensor."
+                        f"Monitored variable '{base_name}' is not a torch.Tensor."
                     )
 
-                # Copy to avoid aliasing
-                self.recorded_values[i][var_name].append(value[filter].detach().clone().squeeze())
+                # --- indexar dimensión extra si se pidió ---
+                if sub_index is not None:
+                    if value.ndim < 2:
+                        raise ValueError(
+                            f"Variable '{base_name}' has no extra dimension to index with '@'."
+                        )
+                    if sub_index >= value.shape[1]:
+                        raise IndexError(
+                            f"Index {sub_index} out of range for '{base_name}' (shape {tuple(value.shape)})."
+                        )
+                    value = value[:, sub_index]
+
+                # --- aplicar filtro y almacenar ---
+                self.recorded_values[i][var_name].append(
+                    value[filt].detach().clone().squeeze()
+                )
 
     def get_variable_tensor(
         self, group_index: int, var_name: str, to_cpu: bool = True

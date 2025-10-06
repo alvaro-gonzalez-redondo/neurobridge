@@ -108,7 +108,7 @@ class BalancedRandomNetworkExperiment(Experiment):
             ax1.scatter(spk_times, neurons+id_sum, s=1, label=label, c=f"C{idx}")
             n_neurons = int(self.spike_monitor.filters[idx].nonzero(as_tuple=True)[0][-1]) + 1
             id_sum += n_neurons
-            times, rate = smooth_spikes(spk_times, n_neurons=n_neurons, to_time=self.time)
+            times, rate = smooth_spikes(spk_times, n_neurons=n_neurons, to_step=self.time)
             ax0.plot(times, rate, c=f"C{idx}")
             
         ax1.legend()

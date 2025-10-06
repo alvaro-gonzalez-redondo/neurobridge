@@ -5,6 +5,8 @@ if TYPE_CHECKING:
     from .neurons import NeuronGroup
 from typing import Optional, Type, Any
 
+from . import globals
+
 import contextlib
 import contextvars
 
@@ -235,7 +237,6 @@ class ConnectionOperator:
         **kwargs: Any,
     ) -> GPUNode:
         """Create a synaptic connection using the simulator's connect method."""
-        from . import globals
         from .sparse_connections import StaticSparse
 
         if globals.simulator is None:

@@ -337,7 +337,7 @@ class Simulator(Node):
         connection_type: Type[GPUNode],
         pattern: str = "all_to_all",
         weight: Optional[Union[Callable, torch.Tensor, float]] = 1.0,
-        delay: Optional[Union[Callable, torch.Tensor, int]] = 1,
+        delay: Optional[Union[Callable, torch.Tensor, int]] = 0,
         **kwargs,
     ) -> GPUNode:
         """
@@ -462,7 +462,7 @@ class Simulator(Node):
         # --- Resolve params ---
 
         weight = resolve_param(weight, src_idx=src_idx, tgt_idx=tgt_idx, src=pre, tgt=pos, default_val=kwargs.get('default_weight', 0.0), dtype=torch.float32)
-        delay = resolve_param(delay, src_idx=src_idx, tgt_idx=tgt_idx, src=pre, tgt=pos, default_val=kwargs.get('default_delay', 1), dtype=torch.long)
+        delay = resolve_param(delay, src_idx=src_idx, tgt_idx=tgt_idx, src=pre, tgt=pos, default_val=kwargs.get('default_delay', 0), dtype=torch.long)
 
 
         # --- Delegate to connect_edges ---
@@ -474,7 +474,7 @@ class Simulator(Node):
             tgt_idx=tgt_idx,
             weight=weight,
             delay=delay,
-            kwargs=kwargs,
+            **kwargs,
         )
 
         return conn

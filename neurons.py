@@ -33,6 +33,7 @@ class NeuronGroup(SpatialGroup):
     _input_currents: torch.Tensor #[neuron, channel]
     n_channels: int
     _input_spikes: torch.Tensor #[neuron]
+    spikes: torch.Tensor #[neuron] Output spikes in this time step.
 
     def __init__(
         self,
@@ -67,6 +68,7 @@ class NeuronGroup(SpatialGroup):
         self._input_spikes = torch.zeros(
             n_neurons, dtype=torch.bool, device=self.device
         )
+        self.spikes = torch.zeros(n_neurons, dtype=torch.bool, device=self.device)
 
     def get_spike_buffer(self):
         """Get the internal spike buffer.
@@ -222,6 +224,7 @@ class ParrotNeurons(NeuronGroup):
                 | self._input_spikes.unsqueeze(1)
             ),
         )
+
         # Clear injected spikes
         self._input_spikes.fill_(False)
 
@@ -233,6 +236,9 @@ class ParrotNeurons(NeuronGroup):
         )
         # Clear input currents
         self._input_currents.fill_(0.0)
+
+        # Save spikes
+        self.spikes.copy_(self._spike_buffer[:, t_idx].squeeze(1))
 
 
 class SimpleIFNeurons(NeuronGroup):
@@ -305,9 +311,10 @@ class SimpleIFNeurons(NeuronGroup):
         self._input_currents.fill_(0.0)
 
         # Determine which neurons spike
-        spikes = (self.V >= self.threshold) | self._input_spikes
-        self._spike_buffer.index_copy_(1, t_idx, spikes.unsqueeze(1))
-        self.V[spikes] = 0.0  # Reset membrane potential
+        self.spikes.copy_(self.V >= self.threshold)
+        self.spikes.logical_or_(self._input_spikes)
+        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
+        self.V[self.spikes] = 0.0  # Reset membrane potential
         self._input_spikes.fill_(False)
 
 
@@ -372,8 +379,8 @@ class RandomSpikeNeurons(NeuronGroup):
         t_idx = globals.simulator.local_circuit.t % self.delay_max
 
         self.probabilities.uniform_()
-        spikes = self.probabilities < self.firing_rate
-        self._spike_buffer.index_copy_(1, t_idx, spikes.unsqueeze(1))
+        self.spikes.copy_(self.probabilities < self.firing_rate)
+        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
 
 
 class IFNeurons(NeuronGroup):
@@ -385,6 +392,7 @@ class IFNeurons(NeuronGroup):
     E_rest: torch.Tensor
     E_channels: torch.Tensor
     channel_states: torch.Tensor  # (n_neurons, n_channels, 2)
+    channel_currents: torch.Tensor # (n_neurons, n_channels)
     channel_decay_factors: torch.Tensor  # (n_channels, 2)
     channel_normalization: torch.Tensor  # (n_channels,)
     input_channels: torch.Tensor  # (n_neurons, n_channels)
@@ -438,6 +446,7 @@ class IFNeurons(NeuronGroup):
 
         self.channel_states = torch.zeros(n_neurons, n_channels, 2, dtype=torch.float32, device=self.device)
         self.input_channels = torch.zeros(n_neurons, n_channels, dtype=torch.float32, device=self.device)
+        self.channel_currents = torch.zeros(n_neurons, n_channels, dtype=torch.float32, device=self.device)
 
         self.E_rest = torch.tensor([E_rest], dtype=torch.float32, device=self.device)
         self.E_channels = torch.tensor(channel_reversal_potentials, dtype=torch.float32, device=self.device)
@@ -447,23 +456,30 @@ class IFNeurons(NeuronGroup):
         super()._process()
         t_idx = globals.simulator.local_circuit.t % self.delay_max
 
-        # Actualización de bi-exponenciales
-        normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)
-        self.channel_states.mul_(self.channel_decay_factors.unsqueeze(0)) # (1, n_channels, 2)
-        self.channel_states.add_(normalized_input.unsqueeze(-1)) # (n_neurons, n_channels, 2)
+        # --- Bi-exponenciales: diferencia de dos LPs con la MISMA entrada ---
+        normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)  # (n_neurons, n_channels)
         self._input_currents.zero_()
 
-        # Corrientes inducidas por canales considerando el potencial de reversión
+        # Decaimiento por componente
+        self.channel_states[:, :, 0].mul_(self.channel_decay_factors[:, 0])  # rise
+        self.channel_states[:, :, 1].mul_(self.channel_decay_factors[:, 1])  # decay
+
+        # La entrada debe sumarse a AMBAS componentes
+        self.channel_states[:, :, 0].add_(normalized_input)
+        self.channel_states[:, :, 1].add_(normalized_input)
+
+        # Corriente de canal (conductancia positiva)
         channel_drive = self.E_channels.unsqueeze(0) - self.V.unsqueeze(1)  # (n_neurons, n_channels)
-        channel_currents = (self.channel_states[:, :, 1] - self.channel_states[:, :, 0]) * channel_drive
-        total_current = channel_currents.sum(dim=1)
+        self.channel_currents.copy_((self.channel_states[:, :, 1] - self.channel_states[:, :, 0]) * channel_drive)
+        total_current = self.channel_currents.sum(dim=1)
 
         # Decaimiento hacia E_rest + integración de corrientes
         self.V.mul_(self.decay).add_(self.E_rest * (1.0 - self.decay)).add_(total_current)
 
         # Generación de spikes
-        spikes = (self.V >= self.threshold) | self._input_spikes
-        self._spike_buffer.index_copy_(1, t_idx, spikes.unsqueeze(1))
+        self.spikes.copy_(self.V >= self.threshold)
+        self.spikes.logical_or_(self._input_spikes)
+        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
         self._V_reset_buffer.copy_(self.V)
-        torch.where(spikes, self.E_rest.expand_as(self.V), self._V_reset_buffer, out=self.V)
+        torch.where(self.spikes, self.E_rest.expand_as(self.V), self._V_reset_buffer, out=self.V)
         self._input_spikes.fill_(False)

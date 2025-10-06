@@ -60,25 +60,25 @@ class PingPongRingExperiment(Experiment):
         # En la primera neurona (rank 0), inyectar un spike inicial para comenzar la actividad
         if self.local_rank == 0:
             if (
-                self.time >= self.start_at
-                and self.time < self.local_neurons.size + self.start_at
+                self.step >= self.start_at
+                and self.step < self.local_neurons.size + self.start_at
             ):
                 initial_spikes = torch.zeros(
                     self.local_neurons.size,
                     dtype=torch.bool,
                     device=self.local_device,
                 )
-                initial_spikes[self.time - self.start_at] = True
+                initial_spikes[self.step - self.start_at] = True
                 self.local_neurons.inject_spikes(initial_spikes)
 
 
     def pos_step(self):
         # Imprimimos los últimos spikes de la población neuronal
         spk_buf = self.local_neurons.get_spike_buffer()
-        phase = (self.time-1) % self.local_neurons.delay_max
+        phase = (self.step-1) % self.local_neurons.delay_max
         spks = spk_buf[:, phase].squeeze().tolist()
         spks_str = "".join(["|" if spk else "_" for spk in spks])
-        log(f"t={self.time:<5}: {spks_str}")
+        log(f"t={self.step:<5}: {spks_str}")
 
 
     def on_finish(self):

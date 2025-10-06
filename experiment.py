@@ -23,9 +23,13 @@ class Experiment:
         self.sim.initialize()
     
     @property
-    def time(self) -> int:
+    def step(self) -> int:
         return self.sim.local_circuit.t.item()
     
+    @property
+    def time(self) -> float:
+        return self.sim.local_circuit.t.item() * 1e3
+
     @property
     def local_rank(self) -> int:
         return self.sim.local_circuit.rank

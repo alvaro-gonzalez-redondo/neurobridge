@@ -118,6 +118,7 @@ class STDPSparse(StaticSparse):
     tau_minus: torch.Tensor
     w_min: torch.Tensor
     w_max: torch.Tensor
+    oja_decay: torch.Tensor
     x_pre: torch.Tensor
     x_pos: torch.Tensor
     alpha_pre: torch.Tensor
@@ -128,12 +129,13 @@ class STDPSparse(StaticSparse):
         super().__init__(spec)
 
         # Parámetros STDP (se pueden pasar en spec.params)
-        self.A_plus = torch.tensor(spec.params.get("A_plus", 1e-2), device=self.device)
-        self.A_minus = torch.tensor(spec.params.get("A_minus", 1.2e-2), device=self.device)
+        self.A_plus = torch.tensor(spec.params.get("A_plus",    1e-4), device=self.device)
+        self.A_minus = torch.tensor(spec.params.get("A_minus", -1.2e-4), device=self.device)
         self.tau_plus = torch.tensor(spec.params.get("tau_plus", 20e-3), device=self.device)
         self.tau_minus = torch.tensor(spec.params.get("tau_minus", 20e-3), device=self.device)
         self.w_min = torch.tensor(spec.params.get("w_min", 0.0), device=self.device)
         self.w_max = torch.tensor(spec.params.get("w_max", 1.0), device=self.device)
+        self.oja_decay = torch.tensor(spec.params.get("oja_decay", 1e-5), device=self.device)
 
         # Trazas sinápticas
         n_edges = len(self.idx_pre)
@@ -160,6 +162,7 @@ class STDPSparse(StaticSparse):
         # 3. STDP updates
         dw_plus = self.A_plus * self.x_pre * pos_spikes
         dw_minus = self.A_minus * self.x_pos * pre_spikes
-        self.weight += dw_plus + dw_minus
+        dw_oja = self.x_pos*self.x_pos * self.weight * self.oja_decay
+        self.weight += dw_plus + dw_minus - dw_oja
 
         self.weight.clamp_(self.w_min, self.w_max)

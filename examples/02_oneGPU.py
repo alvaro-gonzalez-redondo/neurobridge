@@ -28,7 +28,7 @@ class RandomInputExperiment(Experiment):
             stdp_conns = (src_neurons >> tgt_neurons)(
                 pattern="all-to-all",
                 synapse_class=STDPSparse,
-                weight=lambda src_idx, tgt_idx, src_sel, tgt_sel: torch.rand(src_idx.numel()) * 1.9e-3,
+                weight=lambda src_idx, tgt_idx, src_sel, tgt_sel: torch.rand(src_idx.numel()) * (5/n_src_neurons),
             )
 
         with self.sim.autoparent("normal"):
@@ -47,7 +47,7 @@ class RandomInputExperiment(Experiment):
                     )
                 if True:
                     self.voltage_monitor = VariableMonitor(
-                        [tgt_neurons.where_id(lambda ids: ids < 100)], ["V"]
+                        [tgt_neurons.where_id(lambda ids: ids < 10)], ["V"]
                     )
                     self.weight_monitor = VariableMonitor(
                         [stdp_conns.where_id(lambda ids: ids < 100)], ["weight"]
@@ -88,6 +88,6 @@ class RandomInputExperiment(Experiment):
 
 if __name__ == "__main__":
     exp = RandomInputExperiment(sim=Simulator())
-    simulation_length = 10.0
+    simulation_length = 100.0
     simulation_steps = int(simulation_length * 1000)
     exp.run(simulation_steps)
