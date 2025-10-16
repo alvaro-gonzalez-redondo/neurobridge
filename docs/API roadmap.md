@@ -1,286 +1,339 @@
-# NeuroBridge Connection API Implementation Roadmap
+# NeuroBridge Connection API - Implementation Status
 
-This document outlines the implementation roadmap for the enhanced NeuroBridge connection API, organized by priority and dependency.
+**Last Updated:** 2025-10-06
+**Status:** Most features implemented, some advanced features pending
 
-## Phase 1: Core Connection Operator
+This document tracks the implementation status of the NeuroBridge connection API, originally planned as a roadmap and now serving as a status reference.
 
-**Target: Establish the fundamental connection mechanism with the `>>` operator.**
+---
 
-### Step 1.1: Base Connection Classes (HIGH PRIORITY)
+## Phase 1: Core Connection Operator ✅ **COMPLETED**
 
-1. Create a `ConnectionOperator` class that handles connection creation parameters
-2. Implement the `__rshift__` operator (`>>`) for neuron populations
-3. Create a `Connection` class to represent the result of a connection operation
-4. Implement basic connection parameter validation
+### Step 1.1: Base Connection Classes ✅ **IMPLEMENTED**
+
+**Status:** Fully operational since v0.1.5
+
+- ✅ `ConnectionOperator` class handles connection creation parameters
+- ✅ `__rshift__` operator (`>>`) implemented for neuron populations
+- ✅ Connection classes represent sparse and dense connections
+- ✅ Parameter validation in place
 
 ```python
-# Example target implementation:
-conn = (pop1 >> pop2)(pattern='all_to_all', weight=1.0, delay=1)
+# Current implementation:
+conn = (pop1 >> pop2)(pattern='all-to-all', weight=1.0, delay=0)
 ```
 
-### Step 1.2: Basic Connection Patterns (HIGH PRIORITY)
+**Implementation details:**
+- Located in `core.py:223` (`ConnectionOperator`)
+- Delegates to `Simulator.connect()` method (since v0.1.8)
+- Supports both sparse and dense connection types
 
-1. Implement the following connection patterns:
-   - `all_to_all`: Connect every source to every target
-   - `one_to_one`: Connect matching indices
-   - `random`: Connect with probability $p$ or fixed fanin/fanout
-2. Add support for custom connection patterns through explicit indices
+### Step 1.2: Basic Connection Patterns ✅ **IMPLEMENTED**
+
+**Status:** All basic patterns working
+
+Implemented patterns:
+- ✅ `all-to-all`: Full connectivity between populations
+- ✅ `one-to-one`: Direct index mapping (requires same size)
+- ✅ `random`: Probabilistic connectivity with `p`, `fanin`, or `fanout`
+- ✅ `distance`: Spatial connectivity based on positions
 
 ```python
-# Random connectivity by probability
+# Current API examples:
 conn = (pop1 >> pop2)(pattern='random', p=0.1)
-
-# Random connectivity by fanin/fanout
 conn = (pop1 >> pop2)(pattern='random', fanin=10)
 conn = (pop1 >> pop2)(pattern='random', fanout=20)
-
-# Custom indices
-idx_pre = torch.tensor([0, 1, 2])
-idx_pos = torch.tensor([5, 6, 7])
-conn = (pop1 >> pop2)(pattern=(idx_pre, idx_pos), weight=1.0)
+conn = (layer1 >> layer2)(pattern='distance', sigma=2.0, max_distance=5.0)
 ```
 
-### Step 1.3: Connection Object Methods (HIGH PRIORITY)
+**Implementation:** `engine.py:334` (`Simulator.connect()`)
 
-1. Create methods to inspect connection properties:
-   - `get_indices()`
-   - `get_weights()`
-   - `get_delays()`
-2. Implement basic connection manipulation methods:
-   - `scale_weights(factor)`
-   - `set_weights(new_weights)`
+### Step 1.3: Connection Object Methods ⚠️ **PARTIALLY IMPLEMENTED**
 
-## Phase 2: Advanced Connectivity Features
+**Status:** Basic functionality present, advanced manipulation missing
 
-**Target: Expand connectivity options with functional parameters and synapse type selection.**
+Currently available:
+- ✅ Connection objects store indices, weights, delays
+- ✅ Direct access to `weight`, `delay` tensors
+- ❌ No high-level inspection methods (`get_indices()`, etc.)
+- ❌ No manipulation methods (`scale_weights()`, `prune()`)
 
-### Step 2.1: Function-Based Parameters (HIGH PRIORITY)
+**Reason:** Focus has been on performance-critical simulation loop rather than post-hoc manipulation. These can be added on demand.
 
-1. Extend `ConnectionOperator` to handle callable parameters
-2. Implement parameter evaluation based on relevant properties
-3. Add support for different parameter function signatures
+## Phase 2: Advanced Connectivity Features ✅ **MOSTLY COMPLETED**
 
-```python
-# Weight as function of index
-conn = (pop1 >> pop2)(weight=lambda i, j: 1.0 if i < j else 0.5)
+### Step 2.1: Function-Based Parameters ✅ **IMPLEMENTED**
 
-# Weight as function of multi-dimensional coordinates
-conn = (layer1 >> layer2)(
-    pattern='distance',
-    weight=lambda dx, dy: 0.5 * torch.exp(-(dx**2 + dy**2)/10)
-)
+**Status:** Fully functional since v0.1.9
 
-# Custom distance function
-conn = (layer1 >> layer2)(
-    pattern='distance',
-    distance_func=lambda src, tgt: torch.sqrt(((src - tgt)**2).sum()),
-    weight=lambda d: 0.5 * torch.exp(-d/10)
-)
-```
-
-### Step 2.2: Synapse Type Selection (MEDIUM PRIORITY)
-
-1. Extend `ConnectionOperator` to handle synapse class selection
-2. Create a mechanism to instantiate the specified synapse class
-3. Implement parameter forwarding to specific synapse types
+- ✅ `resolve_param()` function handles scalars, tensors, and callables
+- ✅ Functions receive `src_idx`, `tgt_idx`, `src_pos`, `tgt_pos` parameters
+- ✅ Automatic type conversion and device placement
 
 ```python
-# Using synapse class
+# Current API - weight as function:
 conn = (pop1 >> pop2)(
-    synapse=STDPSynapse,
-    weight=0.5,
-    stdp_params={'A_plus': 0.01}
+    pattern='all-to-all',
+    weight=lambda src_idx, tgt_idx, src_pos, tgt_pos: torch.rand(src_idx.numel()) * 0.1
+)
+
+# Distance-based weights:
+conn = (layer1 >> layer2)(
+    pattern='distance',
+    weight=lambda src_idx, tgt_idx, src_pos, tgt_pos: torch.exp(-torch.norm(src_pos - tgt_pos, dim=1))
 )
 ```
 
-## Phase 3: Topological Populations and Distance-Based Connectivity
+**Implementation:** `utils.py:322` (`resolve_param()`)
 
-**Target: Add support for spatial arrangements of neurons and distance-based connectivity.**
+**Note:** Function signature is standardized - all functions receive the same 4 parameters, use as needed.
 
-### Step 3.1: Topological Population Base (HIGH PRIORITY)
+### Step 2.2: Synapse Type Selection ✅ **IMPLEMENTED**
 
-1. Create a `SpatialGroup` class to be inherited by neuron populations
-2. Implement different topology types (1D, 2D, 3D, custom)
-3. Add position generation and access methods
-4. Implement periodic boundary option as a property of the topology
+**Status:** Working, with `synapse_class` parameter
 
-```python
-# Create 2D grid of neurons with periodic boundaries
-layer = population(400, neuron_type=IFNeuron, topology='2d', 
-                  shape=(20, 20), periodic=True)
-
-# Access positions
-positions = layer.positions  # Returns tensor of shape [n_neurons, 2]
-```
-
-## Phase 4: Population Filtering and Masking
-
-**Target: Add ability to select subsets of neurons for connections.**
-
-### Step 4.1: Index-Based Filtering (HIGH PRIORITY)
-
-1. Implement `where_id` method for neuron populations
-2. Create filter application mechanism
-3. Ensure filters pass through the connection operation
+- ✅ Synapse class selection via `synapse_class` parameter (or `connection_type` internally)
+- ✅ Parameter forwarding through `**kwargs`
+- ✅ Both sparse and dense synapse types supported
 
 ```python
-# Connect only specific neurons based on index
-conn = (pop1.where_id(lambda i: i < 100) >> pop2)(pattern='all_to_all'))
+# Current API:
+conn = (pop1 >> pop2)(
+    pattern='random', p=0.1,
+    synapse_class=STDPSparse,
+    weight=0.5,
+    A_plus=1e-4, A_minus=-1.2e-4  # STDP-specific params
+)
+
+# Dense STDP:
+conn = (exc >> exc)(
+    pattern='random', p=0.1,
+    synapse_class=STDPDense,
+    weight=1e-6,
+    w_max=1e-5, oja_decay=3e-3
+)
 ```
 
-### Step 4.2: Position-Based Filtering (MEDIUM PRIORITY)
+**Available synapse types:**
+- `StaticSparse`, `STDPSparse` (default: StaticSparse)
+- `StaticDense`, `STDPDense`
 
-1. Implement `where_pos` method for topological populations
-2. Create predefined region selectors (center, quadrant, etc.)
-3. Add error handling for incompatible operations
+**Implementation:** `core.py:233-260` and `engine.py:334-480`
+
+## Phase 3: Topological Populations and Distance-Based Connectivity ✅ **IMPLEMENTED**
+
+### Step 3.1: Topological Population Base ✅ **IMPLEMENTED**
+
+**Status:** Fully functional
+
+- ✅ `SpatialGroup` class implemented in `group.py:141`
+- ✅ All neuron groups inherit spatial properties
+- ✅ Positions stored as `[n_neurons, spatial_dimensions]` tensor
+- ✅ `block_distance_connect()` utility for efficient distance-based patterns
 
 ```python
-# Filter by position
-conn = (layer1.where_pos(lambda x, y: x**2 + y**2 < 25) >> layer2)(pattern='distance')
+# Current API - neurons have positions by default:
+neurons = IFNeurons(n_neurons=400, spatial_dimensions=2, device='cuda:0')
 
-# Use predefined regions
-conn = (layer1.where_region('center', radius=3) >> layer2)(pattern='all_to_all')
+# Access positions (random by default):
+positions = neurons.positions  # [400, 2] tensor
+
+# Set custom positions:
+neurons.positions = custom_position_tensor
+
+# Distance-based connectivity:
+conn = (layer1 >> layer2)(
+    pattern='distance',
+    sigma=2.0,
+    max_distance=5.0,
+    p_max=1.0
+)
 ```
 
-### Step 4.3: Combined Filtering (LOW PRIORITY)
+**Implementation:**
+- `SpatialGroup`: `group.py:141-226`
+- `block_distance_connect`: `utils.py:339-441`
 
-1. Enable chaining of different filter types
-2. Optimize filter application for performance
-3. Add filter visualization tools
+**Note:** Positions are currently random Gaussian by default. Structured topologies (grids, etc.) can be set manually or via helper functions (not yet built-in).
+
+## Phase 4: Population Filtering and Masking ✅ **IMPLEMENTED**
+
+### Step 4.1: Index-Based Filtering ✅ **IMPLEMENTED**
+
+**Status:** Fully functional
+
+- ✅ `where_id()` method implemented for all groups
+- ✅ Filters create clones (non-destructive)
+- ✅ Filters automatically applied in connection operations
 
 ```python
-# Combine filters
-conn = (pop1.where_id(lambda i: i % 2 == 0).where_pos(lambda x, y: x > 0) >> pop2)(...)
+# Current API:
+conn = (pop1.where_id(lambda i: i < 100) >> pop2)(pattern='all-to-all')
+conn = (source.where_id(lambda ids: ids % 2 == 0) >> target)(pattern='random', p=0.1)
 ```
 
-## Phase 5: Network and Group Operations
+**Implementation:** `group.py:61-98`
 
-**Target: Support operations on groups of populations.**
+### Step 4.2: Position-Based Filtering ✅ **IMPLEMENTED**
 
-### Step 5.1: Basic Network Class (MEDIUM PRIORITY)
+**Status:** `where_pos()` working, predefined regions not yet implemented
 
-1. Create a `Network` class to contain multiple populations
-2. Implement population addition and retrieval
-3. Add network-level connection operations
+- ✅ `where_pos()` method for spatial filtering
+- ✅ Returns cloned group with updated filter
+- ❌ Predefined region selectors (`where_region()`) not implemented
 
 ```python
-# Create a network
-network = Network()
-network.add(pop1, name="input")
-network.add(pop2, name="hidden")
-
-# Connect entire network
-conn = (network >> external_pop)(pattern='random', p=0.05)
+# Current API:
+conn = (layer1.where_pos(lambda pos: pos[:, 0]**2 + pos[:, 1]**2 < 25) >> layer2)(
+    pattern='distance'
+)
 ```
 
-### Step 5.2: Network Component Selection (MEDIUM PRIORITY)
+**Implementation:** `group.py:179-226`
 
-1. Implement indexing for network populations
-2. Enable connections between network components
-3. Add support for multiple population selection
+**Future:** Add convenience methods like `where_region('center', radius=3)` if needed.
+
+### Step 4.3: Combined Filtering ✅ **IMPLEMENTED**
+
+**Status:** Chaining works naturally
+
+- ✅ Filters can be chained
+- ✅ Each returns a new clone with combined filters
+- ❌ No visualization tools yet
 
 ```python
-# Connect specific populations
-conn = (network["input"] >> network["hidden"])(pattern='all_to_all')
+# Current API - chaining works:
+conn = (pop1.where_id(lambda i: i % 2 == 0)
+             .where_pos(lambda pos: pos[:, 0] > 0) >> pop2)(pattern='random', p=0.1)
 ```
 
-### Step 5.3: Network Filtering (LOW PRIORITY)
+**Implementation:** Implicit through clone-based design
 
-1. Extend filtering mechanisms to network level
-2. Implement specialized network-level filters
-3. Add support for cross-population filters
+## Phase 5: Network and Group Operations ❌ **NOT IMPLEMENTED**
+
+**Status:** Decided against implementing - not needed for current use cases
+
+**Rationale:**
+- Networks can be organized using Python data structures (dicts, lists)
+- `Experiment` class provides sufficient structure for most use cases
+- Adding a `Network` class would add complexity without clear benefits
+- Users can easily manage populations manually:
 
 ```python
-# Filter at network level
-conn = (network.where_region('center', radius=5) >> external_pop)()
+# Current approach - works well:
+class MyExperiment(Experiment):
+    def build_network(self):
+        self.input_pop = IFNeurons(...)
+        self.hidden_pop = IFNeurons(...)
+        self.output_pop = IFNeurons(...)
+
+        # Connect them:
+        (self.input_pop >> self.hidden_pop)(...)
+        (self.hidden_pop >> self.output_pop)(...)
 ```
 
-## Phase 6: Advanced Features and Utilities
+**Future consideration:** If users frequently request this, it can be added as a convenience wrapper, but is not a priority.
 
-**Target: Add productivity features and tools for complex networks.**
+## Phase 6: Advanced Features and Utilities ❌ **NOT IMPLEMENTED**
 
-### Step 6.1: Connection Templates (LOW PRIORITY)
+**Status:** Low priority, add on demand
 
-1. Create a `ConnectionTemplate` class
-2. Implement template definition and application
-3. Add parameter override capabilities
+### Step 6.1-6.3: Templates and Visualization ❌ **NOT IMPLEMENTED**
 
+**Rationale:**
+- Connection templates add complexity without clear benefit
+- Users can create their own helper functions for repeated patterns
+- Visualization better handled by external tools (matplotlib, etc.)
+- Focus remains on simulation performance, not convenience features
+
+**Alternative approach:** Users write simple loops or helper functions:
 ```python
-# Define and apply template
-template = ConnectionTemplate()
-template.add("E→E", pattern="random", p=0.1, weight=0.2)
-template.add("E→I", pattern="random", p=0.4, weight=0.3)
-
-template.apply(E=exc_pop, I=inh_pop)
+# Instead of templates, users can write:
+def create_ei_network(E, I, **params):
+    (E >> E)(pattern='random', p=params['EE_p'], weight=params['EE_w'])
+    (E >> I)(pattern='random', p=params['EI_p'], weight=params['EI_w'])
+    (I >> E)(pattern='random', p=params['IE_p'], weight=params['IE_w'])
+    (I >> I)(pattern='random', p=params['II_p'], weight=params['II_w'])
 ```
 
-### Step 6.2: Predefined Templates (LOW PRIORITY)
+---
 
-1. Implement common network motifs as predefined templates
-2. Create scaling mechanisms for templates
-3. Add validation for template application
+## Phase 7: Documentation and Examples ⚠️ **PARTIAL**
 
-```python
-# Use built-in template
-CorticalMicrocircuit().apply(L4E=l4e, L4I=l4i, L2E=l2e, L2I=l2i)
-```
+### Step 7.1: API Documentation ✅ **MOSTLY DONE**
 
-### Step 6.3: Visualization Utilities (LOW PRIORITY)
+- ✅ Most public methods have docstrings
+- ✅ Type hints present in many places
+- ⚠️ Some docstrings outdated or in Spanish
+- ❌ No auto-generated API reference (Sphinx)
 
-1. Create standalone visualization functions
-2. Implement connectivity matrix visualization
-3. Add weight distribution and spatial projection visualizations
+### Step 7.2: Tutorials and Examples ⚠️ **BASIC EXAMPLES ONLY**
 
-```python
-# Visualize connections
-visualize_connectivity(conn)
-visualize_weight_distribution(conn)
-```
+- ✅ Working examples in `examples/` directory
+- ✅ Cover main use cases (single GPU, multi-GPU, STDP)
+- ❌ No Jupyter notebooks
+- ❌ No step-by-step tutorials
 
-## Phase 7: Documentation and Examples
+### Step 7.3: Performance Guide ❌ **NOT DONE**
 
-**Target: Ensure users can effectively utilize the API.**
+- ❌ No performance benchmarks documented
+- ❌ No scaling guidelines
+- ❌ No comparison with other simulators
 
-### Step 7.1: API Documentation (HIGH PRIORITY)
+**Priority:** Will be addressed before v0.2.0 public release
 
-1. Create comprehensive docstrings for all public methods
-2. Implement type annotations for better IDE support
-3. Add examples to docstrings
+---
 
-### Step 7.2: Jupyter Notebook Tutorials (MEDIUM PRIORITY)
+## Implementation Summary
 
-1. Create basic usage tutorials
-2. Add advanced pattern examples
-3. Implement complete network examples
+### What's Working (v0.1.9)
 
-### Step 7.3: Performance Guide (LOW PRIORITY)
+✅ **Core functionality:**
+- Connection operator `>>`
+- All basic patterns (all-to-all, random, distance, one-to-one)
+- Function-based parameters
+- Synapse type selection
+- Spatial groups and filtering
+- Multi-channel neurons
+- CUDA Graph optimization
+- Multi-GPU distribution
 
-1. Document performance characteristics of different patterns
-2. Create guidelines for efficient large-scale network creation
-3. Add benchmarks for comparison
+✅ **Quality of life:**
+- Experiment framework
+- Monitors (Spike, Variable, RingBuffer)
+- Utilities (logging, plotting, distance connectivity)
 
-## Implementation Strategy
+### What's Missing (Lower Priority)
 
-### Iterative Approach
+❌ **Nice-to-haves:**
+- Connection manipulation methods (prune, scale)
+- Network container class
+- Connection templates
+- Predefined region selectors
+- Visualization utilities
+- Comprehensive tutorials
+- Performance benchmarks
 
-1. Implement and test each phase independently
-2. Release incrementally rather than waiting for the full implementation
-3. Gather feedback on early phases to refine later implementations
+### Development Philosophy
 
-### Backwards Compatibility
+The library follows a **pragmatic approach:**
+1. **Implement what's needed for research** - not theoretical features
+2. **Keep the core simple** - users can extend as needed
+3. **Document through examples** - code is often clearer than prose
+4. **Optimize for performance** - not for convenience
 
-1. Maintain compatibility with existing code where possible
-2. Provide migration guides for breaking changes
-3. Consider a parallel API strategy during transition
+This means some planned features were intentionally **not implemented** because they add complexity without sufficient benefit. The current API is powerful enough for advanced use cases while remaining lean and fast.
 
-### Testing Strategy
+---
 
-1. Create unit tests for each API component
-2. Implement integration tests for complex scenarios
-3. Add performance benchmarks to track efficiency
+## For Future Contributors
 
-### Documentation Update Process
+If you want to add features from the "not implemented" sections:
 
-1. Update documentation with each phase release
-2. Include migration guides for existing users
-3. Create example code that demonstrates new features
+1. **Check if it's really needed** - can users solve this with existing tools?
+2. **Keep it optional** - don't break existing code
+3. **Maintain performance** - don't slow down the critical path
+4. **Document well** - examples > long explanations
+5. **Test thoroughly** - especially for multi-GPU scenarios
+
+Remember: **A working core is better than a feature-bloated mess.**

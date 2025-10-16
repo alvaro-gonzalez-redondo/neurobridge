@@ -1,132 +1,200 @@
-# NeuroBridge Connection API Specification
+# NeuroBridge Connection API Specification (v0.1.9)
 
-This document outlines the specifications for the enhanced connection API in the NeuroBridge framework. The core design goals are:
+**Last Updated:** 2025-10-06
+**Status:** Current implementation specification
 
-1. Provide an intuitive, Pythonic API for creating neural connections
-2. Support various connection patterns with minimal code
-3. Enable memory-efficient representations for large-scale simulations
-4. Allow flexible parameter specification, including functional parameters
-5. Support both topological and non-topological populations
+This document describes the actual working API of NeuroBridge v0.1.9, not future plans.
+
+---
 
 ## 1. Core Connection Operator (`>>`)
 
-The primary mechanism for creating connections is the `>>` operator:
+The primary mechanism for creating connections uses the `>>` operator:
 
 ```python
-(source_pop >> target_pop)(pattern='random', p=0.1, weight=0.5, delay=1)
+conn = (source_pop >> target_pop)(pattern='random', p=0.1, weight=0.5, delay=0)
 ```
 
 ### 1.1 Basic Parameters
 
-- `pattern`: Connection pattern type (`'all_to_all'`, `'random'`, `'one_to_one'`, `'distance'`, etc.)
-- `weight`: Synaptic weight (scalar, tensor, or function)
-- `delay`: Synaptic delay (scalar, tensor, or function)
-- `synapse`: Synapse class (e.g., `StaticSynapse`, `STDPSynapse`, or custom class)
-- `sparse`: Format selection (`True`, `False`)
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `pattern` | str | required | Connection pattern (`'all-to-all'`, `'random'`, `'one-to-one'`, `'distance'`) |
+| `weight` | scalar/tensor/callable | 1.0 | Synaptic weights |
+| `delay` | scalar/tensor/callable | 0 | Synaptic delays (time steps) |
+| `synapse_class` | class | `StaticSparse` | Synapse type (`StaticSparse`, `STDPSparse`, `StaticDense`, `STDPDense`) |
+| `channel` | int | 0 | Target synaptic channel (for multi-channel neurons) |
+
+**Additional parameters** are passed through `**kwargs` to the synapse class (e.g., STDP parameters).
 
 ### 1.2 Pattern-Specific Parameters
 
-#### 1.2.1 Random Connectivity
+#### Random Connectivity
 
 ```python
-# Connection by probability
+# Connection probability
 conn = (pop1 >> pop2)(pattern='random', p=0.1)
 
-# Connection by fixed fan-in (each target receives exactly 10 inputs randomly)
+# Fixed fan-in (each target receives exactly N inputs)
 conn = (pop1 >> pop2)(pattern='random', fanin=10)
 
-# Connection by fixed fan-out (each source connects to exactly 20 targets randomly)
+# Fixed fan-out (each source connects to exactly N targets)
 conn = (pop1 >> pop2)(pattern='random', fanout=20)
-```
-- `p`: Connection probability (0.0-1.0)
-- `fanin`: Fixed number of inputs per target neuron
-- `fanout`: Fixed number of outputs per source neuron
-- `allow_self_connections`: For recurrent connections (default: False)
-- `seed`: For reproducibility
 
-#### 1.2.2 Distance-Based Connectivity
+# Both fanin and fanout (balanced)
+conn = (pop1 >> pop2)(pattern='random', fanin=10, fanout=10)
+```
+
+**Parameters:**
+- `p`: Connection probability (0.0-1.0)
+- `fanin`: Fixed inputs per target
+- `fanout`: Fixed outputs per source
+- Only one of `p`, `fanin`, `fanout`, or both `fanin+fanout` can be specified
+
+#### Distance-Based Connectivity
 
 ```python
-conn = (layer1 >> layer2)(
-    pattern='distance', 
-    max_distance=5.0,
-    p_max=1.0,
-    sigma=2.0
-)
-
-# Distance-based with fixed fan-in
+# Gaussian probability
 conn = (layer1 >> layer2)(
     pattern='distance',
-    fanin=10,  # Each target connects to 10 close sources randomly
-    sigma=2.0  # Normal distribution of probability
+    sigma=2.0,
+    p_max=1.0,
+    max_distance=5.0
+)
+
+# Fixed fan-in with distance constraints
+conn = (layer1 >> layer2)(
+    pattern='distance',
+    fanin=10,
+    max_distance=10.0
+)
+
+# Custom probability function
+conn = (layer1 >> layer2)(
+    pattern='distance',
+    prob_func=lambda src_pos, tgt_pos, dists: torch.exp(-dists/sigma)
 )
 ```
-- `max_distance`: Maximum connection distance
-- `p_max`: Maximum connection probability (at distance=0)
-- `sigma`: Width parameter for probability decay
-- `fanin`: Fixed number of inputs per target neuron (selects closest sources)
-- `fanout`: Fixed number of outputs per source neuron (selects closest targets)
-- `prob_func`: Custom probability function (optional)
 
-#### 1.2.3 Specific Connectivity
+**Parameters:**
+- `max_distance`: Maximum connection distance (optional)
+- `p_max`: Maximum connection probability at distance=0 (default: 1.0)
+- `sigma`: Gaussian width for probability decay
+- `fanin`/`fanout`: Select closest neighbors
+- `prob_func`: Custom probability function `(src_block, tgt_all, dists_block) -> probs`
+
+**Implementation:** Uses `block_distance_connect()` for memory efficiency
+
+#### All-to-All Connectivity
 
 ```python
-conn = (pop1 >> pop2)(pattern='specific', sources=[0, 1, 2], targets=[5, 6, 7])
+conn = (pop1 >> pop2)(pattern='all-to-all', weight=0.1)
 ```
-- `sources`: List of source neuron indices
-- `targets`: List of target neuron indices
+
+Connects every source neuron to every target neuron (N_src × N_tgt connections).
+
+#### One-to-One Connectivity
+
+```python
+conn = (pop1 >> pop2)(pattern='one-to-one', weight=1.0)
+```
+
+**Requirement:** `pop1.size == pop2.size`
+
+Connects neuron i to neuron i for all i.
 
 ### 1.3 Function-Based Parameters
 
-Parameters can be functions of relevant properties. Depending on the number of parameters accepted by the lambda function, distance (1 param) or absolute coordinates (2 params) can be used to calculate the values.
+Parameters (`weight`, `delay`) can be:
+1. **Scalar**: Same value for all connections
+2. **Tensor**: Explicit per-connection values (must match number of connections)
+3. **Callable**: Function that generates values
+
+**Function signature:**
+```python
+def param_func(src_idx, tgt_idx, src_pos, tgt_pos):
+    """
+    Parameters:
+    - src_idx: torch.LongTensor of source neuron indices [M]
+    - tgt_idx: torch.LongTensor of target neuron indices [M]
+    - src_pos: torch.Tensor of source positions [M, spatial_dims] (or None)
+    - tgt_pos: torch.Tensor of target positions [M, spatial_dims] (or None)
+
+    Returns:
+    - torch.Tensor of parameter values [M]
+    """
+    return ...
+```
+
+**Examples:**
 
 ```python
-# Weight as function of distance in 2D
-conn = (layer1 >> layer2)(
-    pattern='distance',
-    max_distance=10.0,
-    weight=lambda src, tgt: torch.sqrt(((src[:2] - tgt[:2])**2).sum()) #Two params, so absolute coordinates with src and tgt are given
+# Random weights
+conn = (pop1 >> pop2)(
+    pattern='all-to-all',
+    weight=lambda src, tgt, sp, tp: torch.rand(src.numel()) * 0.1
 )
 
-# Weight using custom distance function with absolute coordinate access
-conn = (ayer1 >> layer2)(
+# Distance-dependent weights
+conn = (layer1 >> layer2)(
     pattern='distance',
-    prob_func=lambda src, tgt: torch.sqrt(((src[:2] - tgt[:2])**2).sum()), #Two params, abs coord
-    weight=lambda d: 0.5 * torch.exp(-d/10) #One param, so distances are given
+    weight=lambda src, tgt, src_pos, tgt_pos:
+        torch.exp(-torch.norm(src_pos - tgt_pos, dim=1) / 2.0)
 )
 
 # Delay proportional to distance
-(layer1 >> layer2)(
+conn = (layer1 >> layer2)(
     pattern='distance',
-    max_distance=10.0,
-    delay=lambda d: 1 + d.floor() #One param, so distance
+    delay=lambda src, tgt, src_pos, tgt_pos:
+        (torch.norm(src_pos - tgt_pos, dim=1) / 0.1).long().clamp(0, 10)
 )
 ```
 
 ### 1.4 Synapse Type Selection
 
 ```python
-# Default static synapse
-conn = (pop1 >> pop2)(weight=1.0)
+# Static sparse (default)
+conn = (pop1 >> pop2)(pattern='random', p=0.1, weight=0.5)
 
-# STDP synapse with custom parameters
+# STDP sparse
 conn = (pop1 >> pop2)(
-    synapse=STDPSynapse,
+    pattern='random', p=0.1,
+    synapse_class=STDPSparse,
     weight=0.5,
-    stdp_params={
-        'A_plus': 0.01,
-        'A_minus': 0.0105,
-        'tau_plus': 20.0
-    }
+    A_plus=1e-4,
+    A_minus=-1.2e-4,
+    tau_plus=20e-3,
+    tau_minus=20e-3,
+    w_min=0.0,
+    w_max=1.0,
+    oja_decay=1e-5
 )
 
-# Custom synapse class
-conn = (pop1 >> pop2)(
-    synapse=MyCustomSynapse,
-    weight=0.5,
-    my_param=42
+# Dense connections (use for high connectivity)
+conn = (exc >> exc)(
+    pattern='random', p=0.8,
+    synapse_class=STDPDense,
+    weight=1e-6,
+    w_max=1e-5
 )
 ```
+
+**Available synapse classes:**
+- `StaticSparse` - Fixed weights, sparse representation
+- `STDPSparse` - Plastic weights with STDP, sparse
+- `StaticDense` - Fixed weights, dense matrix
+- `STDPDense` - Plastic weights with STDP, dense matrix
+
+**STDP Parameters:**
+- `A_plus`: Potentiation rate (positive, e.g., 1e-4)
+- `A_minus`: Depression rate (negative, e.g., -1.2e-4)
+- `tau_plus`: Pre-synaptic trace time constant (seconds)
+- `tau_minus`: Post-synaptic trace time constant (seconds)
+- `w_min`: Minimum weight
+- `w_max`: Maximum weight
+- `oja_decay`: Homeostatic normalization rate
+
+---
 
 ## 2. Population Filtering and Masking
 
@@ -134,151 +202,311 @@ conn = (pop1 >> pop2)(
 
 ```python
 # Filter by neuron index
-conn = (pop1.where_id(lambda i: i < 100) >> pop2)(pattern='all_to_all')
+conn = (pop1.where_id(lambda i: i < 100) >> pop2)(pattern='all-to-all')
+conn = (source.where_id(lambda ids: ids % 2 == 0) >> target)(...)
 ```
 
-### 2.2 Position-Based Filtering (for topological populations)
+### 2.2 Position-Based Filtering
 
 ```python
-# Filter by neuron position
-conn = (layer1.where_pos(lambda x, y: x**2 + y**2 < 25) >> layer2)(pattern='distance', max_distance=5)
-
-# Using predefined regions
-conn = (layer1.where_region('center', radius=3) >> layer2)(pattern='all_to_all')
-conn = (layer1.where_region('quadrant', which=1) >> layer2)(pattern='all_to_all')
-```
-
-### 2.3 Combined Filtering
-
-```python
-# Combine multiple filters
-conn = (pop1.where_id(lambda i: i % 2 == 0).where_pos(lambda x, y: x > 0) >> pop2)(pattern='random', p=0.1)
-```
-
-## 3. Connection Objects
-
-The `>>` operator returns a connection object with various methods:
-
-```python
-conn = (pop1 >> pop2)(pattern='random', p=0.1)
-```
-
-### 3.1 Connection Properties
-
-```python
-# Access connection information
-print(f"Created {len(conn.indices)} connections")
-print(f"Average weight: {conn.weights.mean()}")
-# Maybe more info?
-```
-
-### 3.2 Connection Manipulation
-
-```python
-# Scale all weights
-conn.scale_weights(factor=0.5)
-
-# Prune connections
-conn.prune_weakest(fraction=0.2)
-conn.prune_by_weight(threshold=0.1)
-
-# Apply mask to existing connections
-conn.filter(lambda w, d: w > 0.1 and d < 3) #This requires more work to be correctly defined
-```
-
-## 4. Network and Group Operations
-
-### 4.1 Network Definition
-
-```python
-# Create a network
-network = Network()
-network.add(pop1, name="input")
-network.add(pop2, name="hidden")
-network.add(pop3, name="output")
-```
-
-### 4.2 Network-Level Connections
-
-```python
-# Connect entire network to external population
-conn = (network >> external_pop)(pattern='random', p=0.05)
-
-# Connect specific populations within network
-conn = (network["input"] >> network["hidden"])(pattern='all_to_all')
-conn = (network["input", "hidden"] >> network["output"])(pattern='random', p=0.1)
-```
-
-### 4.3 Network Filtering
-
-```python
-# Apply filters to network populations
-conn = (network["input"].where_id(lambda i: i < 50) >> network["output"])(pattern='all_to_all')
-
-# For topological networks
-conn = (network.where_region('center', radius=5) >> external_pop)(pattern='distance', max_distance=3)
-```
-
-## 5. Topological Populations
-
-### 5.1 Creating Topological Populations
-
-```python
-# 1D topology
-layer_1d = population(100, neuron_type=IFNeuron, topology='1d', length=1.0)
-
-# 2D grid topology with periodic boundaries
-layer_2d = population(400, neuron_type=LIFNeuron, topology='2d', 
-                      shape=(20, 20), extent=(1.0, 1.0), periodic=True)
-
-# 2D with custom positions
-positions = torch.rand(100, 2)  # Custom 2D positions
-layer_custom = population(100, neuron_type=AdExNeuron, topology='custom', positions=positions)
-```
-
-### 5.2 Accessing Topology Information
-
-```python
-# Get neuron positions
-positions = layer_2d.positions  # Returns tensor of shape [n_neurons, dimensions]
-
-# Get distances between neurons
-distances = layer_2d.distance_matrix()  # Full distance matrix between all neurons
-```
-
-## 6. Connection Templates
-
-### 6.1 Defining Templates
-
-```python
-# Define connection template
-template = ConnectionTemplate()
-template.add("E->E", pattern="random", p=0.1, weight=0.2)
-template.add("E->I", pattern="random", p=0.4, weight=0.3)
-template.add("I->E", pattern="random", p=0.4, weight=-0.5)
-template.add("I->I", pattern="random", p=0.1, weight=-0.2)
-```
-
-### 6.2 Applying Templates
-
-```python
-# Apply template to specific populations
-template.apply(
-    E=exc_pop,
-    I=inh_pop
+# Filter by position (for SpatialGroups)
+conn = (layer1.where_pos(lambda pos: pos[:, 0]**2 + pos[:, 1]**2 < 25) >> layer2)(
+    pattern='distance'
 )
 
-# Override parameters
-template.apply(
-    E=exc_pop,
-    I=inh_pop,
-    modifiers={"E->E": {"weight": 0.3}}
+# Select neurons in specific region
+conn = (layer1.where_pos(lambda pos: pos[:, 0] > 0.0) >> layer2)(...)
+```
+
+### 2.3 Rank-Based Filtering (Multi-GPU)
+
+```python
+# Connect only to neurons on specific GPU
+conn = (pop1 >> bridge.where_rank(1))(pattern='one-to-one')
+```
+
+### 2.4 Combined Filtering
+
+```python
+# Chain multiple filters
+conn = (pop1.where_id(lambda i: i < 100)
+             .where_pos(lambda pos: pos[:, 0] > 0) >> pop2)(...)
+```
+
+**Important:** Filters create clones - original groups are not modified.
+
+---
+
+## 3. Neuron Models
+
+### 3.1 Available Models
+
+```python
+from neurobridge import (
+    ParrotNeurons,      # Simple relay neurons
+    SimpleIFNeurons,    # Basic integrate-and-fire
+    RandomSpikeNeurons, # Poisson spike generators
+    IFNeurons           # Multi-channel IF with conductances
 )
 ```
 
-### 6.3 Predefined Templates
+### 3.2 ParrotNeurons
 
 ```python
-# Use built-in templates
-CorticalMicrocircuit().apply(L4E=l4e, L4I=l4i, L2E=l2e, L2I=l2i)
+neurons = ParrotNeurons(
+    n_neurons=100,
+    spatial_dimensions=2,
+    delay_max=20,
+    device='cuda:0'
+)
 ```
+
+Simply relay input spikes/currents without dynamics.
+
+### 3.3 SimpleIFNeurons
+
+```python
+neurons = SimpleIFNeurons(
+    n_neurons=100,
+    spatial_dimensions=2,
+    delay_max=20,
+    threshold=1.0,        # Spike threshold
+    tau_membrane=0.01,    # Membrane time constant (seconds)
+    device='cuda:0'
+)
+```
+
+Basic IF model with exponential decay and reset.
+
+### 3.4 RandomSpikeNeurons
+
+```python
+neurons = RandomSpikeNeurons(
+    n_neurons=100,
+    firing_rate=10.0,     # Firing rate in Hz
+    spatial_dimensions=2,
+    delay_max=20,
+    device='cuda:0'
+)
+```
+
+Poisson spike generators, ignores input.
+
+### 3.5 IFNeurons (Multi-Channel)
+
+```python
+neurons = IFNeurons(
+    n_neurons=100,
+    spatial_dimensions=2,
+    delay_max=20,
+    n_channels=3,         # AMPA, GABA, NMDA by default
+    channel_time_constants=[
+        (0.001, 0.005),   # AMPA: rise 1ms, decay 5ms
+        (0.001, 0.010),   # GABA: rise 1ms, decay 10ms
+        (0.002, 0.100),   # NMDA: rise 2ms, decay 100ms
+    ],
+    channel_reversal_potentials=[
+        0.0,              # AMPA: 0 mV
+        -0.070,           # GABA: -70 mV
+        0.0,              # NMDA: 0 mV
+    ],
+    threshold=-0.050,     # -50 mV
+    tau_membrane=0.010,   # 10 ms
+    E_rest=-0.065,        # -65 mV
+    device='cuda:0'
+)
+```
+
+Realistic IF with conductance-based synapses, bi-exponential dynamics, and reversal potentials.
+
+**Connecting to specific channels:**
+```python
+# AMPA input
+(src >> tgt)(pattern='random', p=0.1, weight=0.001, channel=0)
+
+# GABA input (inhibition)
+(inh >> exc)(pattern='random', p=0.2, weight=0.001, channel=1)
+
+# NMDA input
+(src >> tgt)(pattern='random', p=0.05, weight=0.0005, channel=2)
+```
+
+---
+
+## 4. Monitoring
+
+### 4.1 SpikeMonitor
+
+```python
+monitor = SpikeMonitor([
+    source.where_id(lambda i: i < 10),
+    target.where_id(lambda i: i < 10)
+])
+
+# After simulation:
+spikes = monitor.get_spike_tensor(group_index=0)  # [N_spikes, 2] (neuron_id, time)
+```
+
+### 4.2 VariableMonitor
+
+```python
+monitor = VariableMonitor(
+    [neurons.where_id(lambda i: i < 5)],
+    ['V', 'spikes', 'channel_currents@0']  # @ for indexing extra dimensions
+)
+
+# After simulation:
+voltages = monitor.get_variable_tensor(0, 'V')  # [T, N]
+ampa_currents = monitor.get_variable_tensor(0, 'channel_currents@0')  # [T, N]
+```
+
+### 4.3 RingBufferSpikeMonitor
+
+```python
+monitor = RingBufferSpikeMonitor(
+    [neurons],
+    max_spikes=1_000_000  # Pre-allocated buffer size
+)
+
+# Can retrieve during or after simulation:
+spikes = monitor.get_spike_tensor(0, to_cpu=True)
+```
+
+CUDA-graph compatible, efficient for continuous monitoring.
+
+---
+
+## 5. Experiment Framework
+
+```python
+from neurobridge import Experiment, Simulator
+
+class MyExperiment(Experiment):
+    def build_network(self):
+        # Create neurons and connections
+        with self.sim.autoparent("graph"):  # Inside CUDA graph
+            self.neurons = IFNeurons(n_neurons=100, device=self.local_device)
+            self.source = RandomSpikeNeurons(n_neurons=50, firing_rate=10.0)
+            (self.source >> self.neurons)(pattern='random', p=0.1, weight=0.05)
+
+        with self.sim.autoparent("normal"):  # Outside graph (monitors)
+            self.monitor = SpikeMonitor([self.neurons])
+
+    def on_start(self):
+        print("Starting simulation...")
+
+    def pre_step(self):
+        pass  # Called before each step
+
+    def pos_step(self):
+        pass  # Called after each step
+
+    def on_finish(self):
+        spikes = self.monitor.get_spike_tensor(0)
+        print(f"Recorded {len(spikes)} spikes")
+
+# Run:
+exp = MyExperiment(sim=Simulator(seed=42))
+exp.run(steps=10_000)
+```
+
+### Useful properties:
+- `self.step`: Current simulation step
+- `self.time`: Current time in milliseconds
+- `self.local_rank`: GPU rank (multi-GPU)
+- `self.world_size`: Number of GPUs
+- `self.local_device`: This GPU's device
+
+---
+
+## 6. Multi-GPU Setup
+
+### Single GPU:
+```bash
+python my_experiment.py
+```
+
+### Multiple GPUs:
+```bash
+torchrun --nproc_per_node=2 my_experiment.py
+```
+
+### Using Bridge for Inter-GPU Communication:
+
+```python
+class MultiGPUExperiment(Experiment):
+    def build_network(self):
+        # Add bridge
+        self.add_default_bridge(n_local_neurons=100, n_steps=10)
+        bridge = self.sim.local_circuit.bridge
+
+        if self.local_rank == 0:
+            with self.sim.autoparent("graph"):
+                source = RandomSpikeNeurons(n_neurons=100, firing_rate=10.0)
+                # Send to GPU 1
+                (source >> bridge.where_rank(1))(pattern='one-to-one', weight=1.0)
+
+        elif self.local_rank == 1:
+            with self.sim.autoparent("graph"):
+                target = IFNeurons(n_neurons=100)
+                # Receive from GPU 0
+                (bridge.where_rank(0) >> target)(pattern='one-to-one', weight=0.5)
+```
+
+**Bridge parameters:**
+- `n_local_neurons`: Neurons per GPU in the bridge
+- `n_steps`: Aggregation window (latency = n_steps + 1)
+
+---
+
+## 7. Current Limitations
+
+1. **No state save/load** - Checkpointing not implemented
+2. **Dense connections always allocate full matrix** - No automatic sparse conversion
+3. **Bridge only for single-node multi-GPU** - No inter-node distribution
+4. **No connection manipulation** - Can't prune or modify connections after creation
+5. **Random positions by default** - No built-in grid/topology generators
+
+---
+
+## 8. Performance Tips
+
+1. **Use CUDA Graphs:** Put critical code in `autoparent("graph")`
+2. **Choose sparse vs dense wisely:** Sparse for <10% connectivity, dense otherwise
+3. **Minimize monitors:** Only monitor what you need
+4. **Tune bridge latency:** Lower `n_steps` = lower latency but more overhead
+5. **Batch operations:** Create multiple connections together rather than one-by-one
+
+---
+
+## 9. Quick Reference
+
+### Import Statement:
+```python
+from neurobridge import (
+    Experiment, Simulator,
+    IFNeurons, SimpleIFNeurons, RandomSpikeNeurons, ParrotNeurons,
+    StaticSparse, STDPSparse, StaticDense, STDPDense,
+    SpikeMonitor, VariableMonitor,
+    log, show_or_save_plot
+)
+```
+
+### Basic Workflow:
+```python
+class MyExp(Experiment):
+    def build_network(self):
+        # 1. Create neurons
+        # 2. Connect them
+        # 3. Add monitors
+
+exp = MyExp(sim=Simulator())
+exp.run(steps=10_000)
+```
+
+---
+
+**For more details, see:**
+- Working examples in `examples/` directory
+- Architectural overview in `docs/Architectural overview.md`
+- Project status in root `PROJECT_STATUS.md`
