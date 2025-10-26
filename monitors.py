@@ -127,6 +127,7 @@ class VariableMonitor(Node):
     recorded_values: List[
         Dict[str, List[torch.Tensor]]
     ]  # [group_idx][var_name] = list of tensors over time
+    neuron_filters: List[Dict[str, torch.Tensor]]  # Neuron-level filters deduced from connection filters
 
     def __init__(self, groups: List[Group], variable_names: List[str]):
         """Initialize a variable monitor for the given groups and variables.
@@ -137,11 +138,40 @@ class VariableMonitor(Node):
             List of groups to monitor.
         variable_names : List[str]
             Names of variables to monitor in each group.
+
+        Notes
+        -----
+        For connection groups, the filter is used for per-synapse variables (like weight).
+        For per-neuron trace variables (like last_eligibility, last_learning_signal),
+        the neuron indices are automatically deduced from which rows/columns of the
+        connection filter matrix have True values:
+        - Presynaptic neurons: rows with any True value
+        - Postsynaptic neurons: columns with any True value
         """
         super().__init__()
         self.groups = groups
         self.filters = [group.filter.nonzero(as_tuple=True)[0] for group in groups]
         self.variable_names = variable_names
+
+        # Deduce neuron-level filters from connection filters
+        self.neuron_filters = []
+        for group in groups:
+            # Check if group has 2D filter (connection) or 1D filter (neuron group)
+            if group.filter.ndim == 2:
+                # Connection filter: deduce pre/post neurons from rows/columns with True
+                rows_with_true = group.filter.any(dim=1).nonzero(as_tuple=True)[0]
+                cols_with_true = group.filter.any(dim=0).nonzero(as_tuple=True)[0]
+                self.neuron_filters.append({
+                    'pre': rows_with_true,
+                    'post': cols_with_true
+                })
+            else:
+                # Neuron group: use the filter as-is (though traces don't apply here)
+                neuron_idx = group.filter.nonzero(as_tuple=True)[0]
+                self.neuron_filters.append({
+                    'pre': neuron_idx,
+                    'post': neuron_idx
+                })
 
         # recorded_values[i][var] = list of tensors over time
         self.recorded_values = [
@@ -184,9 +214,45 @@ class VariableMonitor(Node):
                     value = value[:, sub_index]
 
                 # --- aplicar filtro y almacenar ---
-                self.recorded_values[i][var_name].append(
-                    value[filt].detach().clone().squeeze()
-                )
+                # Special handling for per-neuron traces (not per-synapse variables)
+                # These variables have shape (num_components, num_neurons) and should not
+                # be filtered like weight matrices
+                if base_name == 'last_eligibility':
+                    # Eligibility traces: shape (num_components, num_neurons)
+                    # For STDP: (2, num_neurons) where [0]=x_pre, [1]=x_post
+                    # For Vogels: (1, num_neurons) where [0]=x_pre
+
+                    # Apply neuron-level filters deduced from connection filter
+                    pre_filter = self.neuron_filters[i]['pre']
+                    post_filter = self.neuron_filters[i]['post']
+
+                    if value.shape[0] == 1:
+                        # Vogels: only x_pre
+                        filtered_value = torch.stack([
+                            value[0, pre_filter].detach().clone()
+                        ], dim=0)
+                    elif value.shape[0] == 2:
+                        # STDP: x_pre and x_post
+                        filtered_value = torch.stack([
+                            value[0, pre_filter].detach().clone(),
+                            value[1, post_filter].detach().clone()
+                        ], dim=0)
+                    else:
+                        raise ValueError(f"Unexpected eligibility shape: {value.shape}")
+
+                    self.recorded_values[i][var_name].append(filtered_value)
+
+                elif base_name == 'last_learning_signal':
+                    # Learning signal: shape (num_post_neurons,)
+                    post_filter = self.neuron_filters[i]['post']
+                    filtered_value = value[post_filter].detach().clone()
+                    self.recorded_values[i][var_name].append(filtered_value)
+
+                else:
+                    # Apply connection filter to per-synapse variables like weight
+                    self.recorded_values[i][var_name].append(
+                        value[filt].detach().clone().squeeze()
+                    )
 
     def get_variable_tensor(
         self, group_index: int, var_name: str, to_cpu: bool = True

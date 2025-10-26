@@ -160,9 +160,9 @@ class STDPSparse(StaticSparse):
         self.x_pos += pos_spikes.to(torch.float32)
 
         # 3. STDP updates
-        dw_plus = self.A_plus * self.x_pre * pos_spikes
-        dw_minus = self.A_minus * self.x_pos * pre_spikes
-        dw_oja = self.x_pos*self.x_pos * self.weight * self.oja_decay
-        self.weight += dw_plus + dw_minus - dw_oja
+        potentiation = self.A_plus * self.x_pre * pos_spikes
+        depression = self.A_minus * self.x_pos * pre_spikes
+        homeostasis = self.x_pos*self.x_pos * self.weight * self.oja_decay
+        self.weight += potentiation + depression - homeostasis
 
         self.weight.clamp_(self.w_min, self.w_max)

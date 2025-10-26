@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from . import globals
+from .. import globals
 
 import logging
 import sys
@@ -320,20 +320,81 @@ def to_tensor(x, dtype, device=None):
 
 
 def resolve_param(param:Any, src_idx:torch.Tensor, tgt_idx:torch.Tensor, src:torch.Tensor, tgt:torch.Tensor, default_val:Any, dtype:Any):
+    """Resolve connection parameters to tensors.
+
+    Supports multiple input types:
+    - Tuple (low, high): Uniform distribution for floats, UniformInt for ints
+    - RandomDistribution instance: Custom distribution
+    - Callable: Lambda function (pre_idx, tgt_idx, pre_pos, tgt_pos) -> values
+    - Tensor: Direct tensor
+    - Scalar: Broadcast to all connections
+    - None: Use default_val
+
+    Parameters
+    ----------
+    param : Any
+        Parameter specification (see above).
+    src_idx : torch.Tensor
+        Source neuron indices.
+    tgt_idx : torch.Tensor
+        Target neuron indices.
+    src : torch.Tensor
+        Source neuron group.
+    tgt : torch.Tensor
+        Target neuron group.
+    default_val : Any
+        Default value if param is None.
+    dtype : torch.dtype
+        Target dtype for the output tensor.
+
+    Returns
+    -------
+    torch.Tensor
+        Resolved parameter tensor of shape (num_connections,).
+    """
+    from .random import RandomDistribution, Uniform, UniformInt
+
     device = src.device
-    if callable(param):
+    n_connections = src_idx.numel()
+
+    # Handle tuple: (low, high) → distribution
+    if isinstance(param, tuple):
+        if len(param) != 2:
+            raise ValueError(f"Tuple parameter must have 2 elements (low, high), got {len(param)}")
+        low, high = param
+
+        # Use UniformInt for integer dtypes, Uniform for floats
+        if dtype in (torch.long, torch.int, torch.int32, torch.int64):
+            dist = UniformInt(int(low), int(high))
+        else:
+            dist = Uniform(float(low), float(high))
+
+        return dist.sample(n_connections, device).to(dtype=dtype)
+
+    # Handle RandomDistribution instances
+    elif isinstance(param, RandomDistribution):
+        return param.sample(n_connections, device).to(dtype=dtype)
+
+    # Handle callable (lambda function)
+    elif callable(param):
         src_pos = getattr(src,"positions",None)
         tgt_pos = getattr(tgt,"positions",None)
         src_sel = src_pos[src_idx] if src_pos is not None else None
         tgt_sel = tgt_pos[tgt_idx] if tgt_pos is not None else None
         out = param(src_idx, tgt_idx, src_sel, tgt_sel)
         return out.to(device=device, dtype=dtype)
+
+    # Handle tensor
     elif torch.is_tensor(param):
         return param.to(device=device,dtype=dtype)
+
+    # Handle None (use default)
     elif param is None:
-        return torch.full((src_idx.numel(),), default_val, device=device, dtype=dtype)
+        return torch.full((n_connections,), default_val, device=device, dtype=dtype)
+
+    # Handle scalar
     else:
-        return torch.full((src_idx.numel(),), float(param), device=device, dtype=dtype)
+        return torch.full((n_connections,), float(param), device=device, dtype=dtype)
 
 
 def block_distance_connect(
