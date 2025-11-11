@@ -608,3 +608,113 @@ class StochasticIFNeurons(IFNeurons):
 
         # Limpiar spikes inyectados
         self._input_spikes.fill_(False)
+
+
+class PhaseIFNeurons(IFNeurons):
+    """IF sin reset con disparo determinista vía integración de fase.
+    
+    La tasa instantánea r(V) se obtiene con un umbral suave (sigmoide) y
+    se integra como dphi/dt = r(V). Se emite spike cuando phi >= 1.
+    No hay reset del potencial: V sigue su dinámica continua.
+    """
+
+    phase: torch.Tensor
+    beta: float
+    r_max: float
+    theta: torch.Tensor
+    jitter_std: float
+    ahp_drop: float
+
+    def __init__(
+        self,
+        *args,
+        beta: float = 200.0,         # “dureza” del umbral suave
+        r_max: float = 300.0,        # Hz, tasa máxima (seguridad/clip)
+        theta: float = None,         # umbral para la sigmoide; por defecto usa self.threshold
+        jitter_std: float = 0.0,     # desviación típica del jitter de fase (en unidades de fase/sqrt(s))
+        ahp_drop: float = 0.0,       # caída suave tras spike (ej. 0.002 => ~2 mV)
+        tau_phi: float = 0.05  # 50 ms de constante de tiempo típica
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.beta = float(beta)
+        self.r_max = float(r_max)
+        self.theta = self.threshold.clone() if theta is None else torch.tensor([theta], dtype=torch.float32, device=self.device)
+        self.jitter_std = float(jitter_std)
+        self.ahp_drop = float(ahp_drop)
+        self.phi_decay = torch.exp(-self.dt / tau_phi)
+        # Fase inicial
+        self.phase = torch.zeros_like(self.V)
+        # El refractario “duro” ya no se usa; lo dejamos en cero
+        if hasattr(self, "refrac_counter"):
+            self.refrac_counter.zero_()
+
+    @torch.no_grad()
+    def _process(self) -> None:
+        # ⚠️ No llamar a IFNeurons._process (haría reset). Llamamos al de la clase base de la jerarquía.
+        super(NeuronGroup, self)._process()
+        t_idx = globals.simulator.local_circuit.t % self.delay_max
+
+        # === 1) Dinámica sináptica: igual que en IFNeurons ===
+        normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)  # (n_neurons, n_channels)
+        self._input_currents.zero_()
+
+        # Decaimiento bi-exponencial
+        self.channel_states[:, :, 0].mul_(self.channel_decay_factors[:, 0])  # rise
+        self.channel_states[:, :, 1].mul_(self.channel_decay_factors[:, 1])  # decay
+        # Inyección a ambas ramas
+        self.channel_states[:, :, 0].add_(normalized_input)
+        self.channel_states[:, :, 1].add_(normalized_input)
+
+        # g_i >= 0
+        g_channels = torch.relu(self.channel_states[:, :, 1] - self.channel_states[:, :, 0])  # (n_neurons, n_channels)
+
+        # Solo para monitorización (como en tu clase)
+        channel_drive = self.E_channels.unsqueeze(0) - self.V.unsqueeze(1)
+        self.channel_currents.copy_(g_channels * channel_drive)
+
+        # === 2) Integración analítica del voltaje (sin reset) ===
+        g_syn = g_channels.sum(dim=1)                      # (n,)
+        g_eff = g_syn + self.g_leak                        # (n,)
+        E_eff_num = self.g_leak * self.E_rest + (g_channels * self.E_channels).sum(dim=1)
+        E_eff = E_eff_num / g_eff
+        exp_term = torch.exp(-g_eff * (self.dt / self.Cm))
+        self.V.copy_(E_eff + (self.V - E_eff) * exp_term)
+
+        # === 3) Tasa instantánea y avance de fase ===
+        # r(V) = r_max * sigmoid(beta*(V - theta))
+        # Nota: r se interpreta en Hz, dt en segundos -> incremento de fase = r * dt
+        r = self.r_max * torch.sigmoid(self.beta * (self.V - self.theta))  # (n,)
+        self.phase.add_(r * self.dt)
+
+        # Avance de fase con decaimiento
+        self.phase.mul_(self.phi_decay)
+        self.phase.add_(r * self.dt)
+
+        # Jitter opcional en fase (evita sincronías demasiado rígidas)
+        if self.jitter_std > 0.0:
+            # Escala ~ sqrt(dt) para ruido blanco en tiempo continuo
+            self.phase.add_(torch.randn_like(self.phase) * (self.jitter_std * (self.dt ** 0.5)))
+
+        # === 4) Detección de spikes por sobrepaso de 1 ciclo de fase ===
+        # Contabilizamos potencialmente múltiples cruces en un dt (r*dt > 1),
+        # pero el buffer es booleano por paso, así que solo marcamos True si hubo >=1.
+        n_spikes_float = torch.floor(torch.clamp_min(self.phase, 0.0))
+        spike_candidates = n_spikes_float >= 1.0
+
+        # Drenamos fase en bloque (equivalente a while phi>=1: phi-=1)
+        self.phase.sub_(n_spikes_float)
+
+        # AHP suave opcional (baja un poco V hacia E_rest tras disparo)
+        if self.ahp_drop > 0.0:
+            # Aplicamos caída solo donde hubo spike
+            # (V <- V - ahp_drop) o, más fisiológico: V <- V - ahp_drop*(V - E_rest)
+            self.V.sub_(spike_candidates.float() * self.ahp_drop)
+
+        # === 5) Inyección de spikes externos y escritura del buffer ===
+        # Unimos candidatos con inyecciones externas de este paso
+        self.spikes.copy_(spike_candidates | self._input_spikes)
+        # Registrar en el buffer (bool por paso)
+        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
+        # Limpiar inyección para el siguiente paso
+        self._input_spikes.fill_(False)
