@@ -384,19 +384,37 @@ class RandomSpikeNeurons(NeuronGroup):
 
 
 class IFNeurons(NeuronGroup):
-    """Neuronas Integrate-and-Fire multicanal con potenciales de reversión y bi-exponenciales."""
+    """Integrate-and-Fire neurons with multi-channel conductance-based dynamics.
+
+    Uses analytical integration for membrane potential to avoid overshoots and
+    ensure unconditional stability. Each channel has bi-exponential conductance
+    dynamics (rise/decay) and a reversal potential.
+
+    The membrane potential evolves according to:
+        Cm·dV/dt = -g_leak·(V - E_rest) - Σᵢ gᵢ·(V - Eᵢ)
+
+    which is integrated exactly using:
+        V(t+dt) = E_eff + (V - E_eff)·exp(-g_eff·dt/Cm)
+    where g_eff = g_leak + Σᵢ gᵢ and E_eff is the weighted reversal potential.
+    """
 
     V: torch.Tensor
     threshold: torch.Tensor
-    decay: torch.Tensor
     E_rest: torch.Tensor
     E_channels: torch.Tensor
     channel_states: torch.Tensor  # (n_neurons, n_channels, 2)
-    channel_currents: torch.Tensor # (n_neurons, n_channels)
+    channel_currents: torch.Tensor  # (n_neurons, n_channels) - for monitoring only
     channel_decay_factors: torch.Tensor  # (n_channels, 2)
     channel_normalization: torch.Tensor  # (n_channels,)
     input_channels: torch.Tensor  # (n_neurons, n_channels)
     _V_reset_buffer: torch.Tensor
+    refrac_counter: torch.Tensor  # Absolute refractory period counter
+    refrac_steps: int  # Number of steps for refractory period
+
+    # Physical parameters for analytical integration
+    dt: float  # Timestep in seconds
+    Cm: float  # Membrane capacitance (normalized to 1.0)
+    g_leak: float  # Leak conductance
 
     def __init__(
         self,
@@ -410,13 +428,14 @@ class IFNeurons(NeuronGroup):
             (0.002, 0.100),  # NMDA: subida 2ms, caída 100ms
         ),
         channel_reversal_potentials: list[float] = (
-            0.0,    # AMPA: 0 mV
+            0.0,     # AMPA: 0 mV
             -0.070,  # GABA: -70 mV
-            0.0,    # NMDA: 0 mV
+            0.0,     # NMDA: 0 mV
         ),
-        threshold: float = -0.050,  # -50 mV
-        tau_membrane: float = 0.010,  # 10 ms
-        E_rest: float = -0.065,  # -65 mV
+        threshold: float = -0.050,   # -50 mV
+        tau_membrane: float = 0.010, # 10 ms
+        E_rest: float = -0.065,      # -65 mV
+        tau_refrac: float = 0.002,   # 2 ms absolute refractory period
         device: str = None,
     ):
         super().__init__(
@@ -429,17 +448,23 @@ class IFNeurons(NeuronGroup):
         assert len(channel_time_constants) == n_channels
         assert len(channel_reversal_potentials) == n_channels
 
+        # Physical parameters for analytical integration
+        # Scale Cm and g_leak together to maintain tau_membrane while keeping
+        # g_leak comparable to synaptic conductances (which are in weight units)
+        self.dt = 1e-3          # 1 ms per timestep
+        self.Cm = tau_membrane  # Capacitance scaled to match tau (e.g., 0.01 for 10ms)
+        self.g_leak = 1.0       # Normalized leak conductance (comparable to weight scales)
+
         self.V = torch.full((n_neurons,), E_rest, dtype=torch.float32, device=self.device)
         self._V_reset_buffer = torch.empty_like(self.V)
         self.threshold = torch.tensor([threshold], dtype=torch.float32, device=self.device)
-        self.decay = torch.exp(torch.tensor(-1e-3 / tau_membrane, dtype=torch.float32, device=self.device))
 
         tau_rise = torch.tensor([tc[0] for tc in channel_time_constants], dtype=torch.float32, device=self.device)
         tau_decay = torch.tensor([tc[1] for tc in channel_time_constants], dtype=torch.float32, device=self.device)
 
         self.channel_decay_factors = torch.stack([
-            torch.exp(-1e-3 / tau_rise),
-            torch.exp(-1e-3 / tau_decay)
+            torch.exp(-self.dt / tau_rise),
+            torch.exp(-self.dt / tau_decay)
         ], dim=1)  # (n_channels, 2)
 
         self.channel_normalization = (tau_decay - tau_rise) / (tau_decay * tau_rise)
@@ -451,8 +476,17 @@ class IFNeurons(NeuronGroup):
         self.E_rest = torch.tensor([E_rest], dtype=torch.float32, device=self.device)
         self.E_channels = torch.tensor(channel_reversal_potentials, dtype=torch.float32, device=self.device)
 
+        # Absolute refractory period (prevents unrealistic firing rates)
+        self.refrac_steps = int(tau_refrac / self.dt)  # Convert to timesteps
+        self.refrac_counter = torch.zeros(n_neurons, dtype=torch.int32, device=self.device)
+
     def _process(self) -> None:
-        """Actualiza los estados internos, integra la dinámica y genera spikes."""
+        """Updates internal states, integrates dynamics and generates spikes.
+
+        Uses analytical integration for unconditional stability and to avoid
+        voltage overshoots. The membrane potential converges exponentially
+        towards the weighted reversal potential E_eff.
+        """
         super()._process()
         t_idx = globals.simulator.local_circuit.t % self.delay_max
 
@@ -468,18 +502,109 @@ class IFNeurons(NeuronGroup):
         self.channel_states[:, :, 0].add_(normalized_input)
         self.channel_states[:, :, 1].add_(normalized_input)
 
-        # Corriente de canal (conductancia positiva)
+        # Conductancia de canal: g_i = relu(decay - rise) >= 0
+        g_channels = torch.relu(self.channel_states[:, :, 1] - self.channel_states[:, :, 0])  # (n_neurons, n_channels)
+
+        # Corriente de canal (g_i * (E_i - V)) - stored for monitoring only
         channel_drive = self.E_channels.unsqueeze(0) - self.V.unsqueeze(1)  # (n_neurons, n_channels)
-        self.channel_currents.copy_((self.channel_states[:, :, 1] - self.channel_states[:, :, 0]) * channel_drive)
-        total_current = self.channel_currents.sum(dim=1)
+        self.channel_currents.copy_(g_channels * channel_drive)
 
-        # Decaimiento hacia E_rest + integración de corrientes
-        self.V.mul_(self.decay).add_(self.E_rest * (1.0 - self.decay)).add_(total_current)
+        # --- ANALYTICAL INTEGRATION (conductance-based, unconditionally stable) ---
+        # Total synaptic conductance
+        g_syn = g_channels.sum(dim=1)  # (n_neurons,)
 
-        # Generación de spikes
-        self.spikes.copy_(self.V >= self.threshold)
+        # Effective conductance: leak + synaptic
+        g_eff = g_syn + self.g_leak  # (n_neurons,)
+
+        # Effective reversal potential: weighted by conductances
+        # E_eff = (g_leak*E_rest + sum_i g_i*E_i) / g_eff
+        E_eff_num = self.g_leak * self.E_rest + (g_channels * self.E_channels).sum(dim=1)
+        E_eff = E_eff_num / g_eff
+
+        # Exact solution of linear ODE: V(t+dt) = E_eff + (V - E_eff) * exp(-g_eff * dt / Cm)
+        exp_term = torch.exp(-g_eff * (self.dt / self.Cm))
+        self.V.copy_(E_eff + (self.V - E_eff) * exp_term)
+
+        # Decrementar contador refractario (clamp a 0)
+        self.refrac_counter.sub_(1).clamp_(min=0)
+
+        # Generación de spikes: solo si V >= threshold Y no está en periodo refractario
+        spike_candidates = self.V >= self.threshold
+        not_refractory = self.refrac_counter == 0
+        self.spikes.copy_(spike_candidates & not_refractory)
         self.spikes.logical_or_(self._input_spikes)
+
+        # Resetear contador refractario para neuronas que dispararon
+        self.refrac_counter.masked_fill_(self.spikes, self.refrac_steps)
+
+        # Registrar spikes y aplicar reset a E_rest tras el disparo
         self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
         self._V_reset_buffer.copy_(self.V)
         torch.where(self.spikes, self.E_rest.expand_as(self.V), self._V_reset_buffer, out=self.V)
+
+        # Limpiar spikes inyectados
+        self._input_spikes.fill_(False)
+
+
+class StochasticIFNeurons(IFNeurons):
+    """Integrate-and-Fire neurons without reset, with stochastic spike generation.
+
+    The membrane potential decays continuously; spikes are emitted
+    probabilistically as a smooth function of V relative to threshold.
+    """
+
+    def __init__(self, *args, beta: float = 200.0, **kwargs):
+        """
+        beta : float
+            Steepness of the sigmoid that converts voltage into spike probability.
+            Larger beta -> more deterministic firing.
+        """
+        super().__init__(*args, **kwargs)
+        self.beta = beta
+        # Eliminamos el uso del contador refractario (ya no se necesita un reset duro)
+        self.refrac_counter.zero_()
+
+    def _process(self) -> None:
+        super(NeuronGroup, self)._process()  # ⚠️ saltar llamada a IFNeurons._process
+        t_idx = globals.simulator.local_circuit.t % self.delay_max
+
+        # --- Dinámica sináptica idéntica a tu versión ---
+        normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)
+        self._input_currents.zero_()
+
+        self.channel_states[:, :, 0].mul_(self.channel_decay_factors[:, 0])
+        self.channel_states[:, :, 1].mul_(self.channel_decay_factors[:, 1])
+        self.channel_states[:, :, 0].add_(normalized_input)
+        self.channel_states[:, :, 1].add_(normalized_input)
+
+        g_channels = torch.relu(self.channel_states[:, :, 1] - self.channel_states[:, :, 0])
+        channel_drive = self.E_channels.unsqueeze(0) - self.V.unsqueeze(1)
+        self.channel_currents.copy_(g_channels * channel_drive)
+
+        g_syn = g_channels.sum(dim=1)
+        g_eff = g_syn + self.g_leak
+        E_eff_num = self.g_leak * self.E_rest + (g_channels * self.E_channels).sum(dim=1)
+        E_eff = E_eff_num / g_eff
+
+        exp_term = torch.exp(-g_eff * (self.dt / self.Cm))
+        self.V.copy_(E_eff + (self.V - E_eff) * exp_term)
+
+        # --- 🔸 NUEVA PARTE: generación de spikes estocástica ---
+        # Probabilidad instantánea de spike: sigmoide del voltaje
+        #   p = σ(β(V - V_th)) * dt_scale
+        # dt_scale ajusta la probabilidad a segundos (asumiendo dt en segundos)
+        target_firing_rate = 20.0
+        dt_scale = 1e-3  # o self.dt si quieres interpretar p por segundo
+        p_spike = torch.sigmoid(self.beta * (self.V - self.threshold)) * dt_scale * target_firing_rate
+
+        # Generar spikes Bernoulli(p)
+        rand_vals = torch.rand_like(p_spike)
+        self.spikes.copy_(rand_vals < p_spike)
+        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
+
+        # --- 🔸 Sin reset: el voltaje sigue su dinámica continua ---
+        # (opcional: ligera caída tras un spike, para evitar runaway)
+        #self.V.sub_(self.spikes.float() * 0.002)  # caída suave opcional de 2 mV
+
+        # Limpiar spikes inyectados
         self._input_spikes.fill_(False)
