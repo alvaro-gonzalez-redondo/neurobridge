@@ -28,11 +28,11 @@ class RandomInputExperiment(Experiment):
         self.add_default_bridge(n_local_neurons=n_local_bridge_neurons, n_steps=20)
         bridge = self.sim.local_circuit.bridge
 
-        if self.local_rank == 0:
+        if self.current_rank == 0:
 
             with self.sim.autoparent("graph"):
                 src_neurons = RandomSpikeNeurons(
-                    device=self.local_device,
+                    device=self.current_device,
                     n_neurons=n_src_neurons,
                     firing_rate=10.0,
                 )
@@ -48,11 +48,11 @@ class RandomInputExperiment(Experiment):
                         [src_neurons.where_id(lambda ids: ids < 20)]
                     )
 
-        elif self.local_rank == 1:
+        elif self.current_rank == 1:
 
             with self.sim.autoparent("graph"):
                 tgt_neurons = SimpleIFNeurons(
-                    device=self.local_device,
+                    device=self.current_device,
                     n_neurons=n_tgt_neurons,
                 )
 
@@ -77,27 +77,27 @@ class RandomInputExperiment(Experiment):
 
     def on_finish(self):
 
-        if self.local_rank == 0:
+        if self.current_rank == 0:
             spks = self.spike_monitor.get_spike_tensor(0)
             ot, oi = spks[:, 1], spks[:, 0]
             plt.scatter(ot, oi, s=4)
-            show_or_save_plot(filename=f"rank{self.local_rank}_src_spikes.png", log=log)
+            show_or_save_plot(filename=f"rank{self.current_rank}_src_spikes.png", log=log)
 
-        elif self.local_rank == 1:
+        elif self.current_rank == 1:
             spks = self.spike_monitor.get_spike_tensor(0)
             ot, oi = spks[:, 1], spks[:, 0]
             plt.scatter(ot, oi, s=4)
-            show_or_save_plot(filename=f"rank{self.local_rank}_tgt_spikes.png", log=log)
+            show_or_save_plot(filename=f"rank{self.current_rank}_tgt_spikes.png", log=log)
 
             plt.figure()
             vals = self.voltage_monitor.get_variable_tensor(0, "V")
             plt.plot(vals)
-            show_or_save_plot(filename=f"rank{self.local_rank}_v_tgt.png", log=log)
+            show_or_save_plot(filename=f"rank{self.current_rank}_v_tgt.png", log=log)
 
             plt.figure()
             vals = self.weight_monitor.get_variable_tensor(0, "weight")
             plt.plot(vals)
-            show_or_save_plot(filename=f"rank{self.local_rank}_weight_sample.png", log=log)
+            show_or_save_plot(filename=f"rank{self.current_rank}_weight_sample.png", log=log)
 
 
 # Main

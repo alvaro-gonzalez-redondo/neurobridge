@@ -92,10 +92,10 @@ class StaticDense(Dense):
 
     def _propagate(self):
         """Propagate spikes using dense weight matrix and uniform delay."""
-        t = globals.simulator.local_circuit.t
-        t_idx = (t - self.delay) % self.pre.delay_max
+        current_step = globals.simulator.local_circuit.current_step
+        phase = (current_step - self.delay) % self.pre.delay_max
 
-        pre_spikes = self.pre._spike_buffer[:, t_idx].to(self.weight.dtype).squeeze(-1)  # [Npre]
+        pre_spikes = self.pre._spike_buffer[:, phase].to(self.weight.dtype).squeeze(-1)  # [Npre]
         effective_weight = self.weight.masked_fill(~self.mask, 0)
         contrib = pre_spikes @ effective_weight
         self.pos.inject_currents(contrib, self.channel)
@@ -177,9 +177,9 @@ class STDPDense(StaticDense):
         self.x_pos *= self.alpha_pos
 
         # Get current spikes
-        t = globals.simulator.local_circuit.t
-        t_idx = (t - self.delay) % self.pre.delay_max
-        pre_spikes = self.pre._spike_buffer[:, t_idx].float().squeeze(-1)  # [Npre]
+        current_step = globals.simulator.local_circuit.current_step
+        phase = (current_step - self.delay) % self.pre.delay_max
+        pre_spikes = self.pre._spike_buffer[:, phase].float().squeeze(-1)  # [Npre]
         pos_spikes = self.pos.get_spikes().float()             # [Npos]
 
         # Update traces

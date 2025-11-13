@@ -67,21 +67,21 @@ class RandomInputExperiment(Experiment):
             ot, oi = tgt_spikes[:, 1], tgt_spikes[:, 0]
             plt.scatter(ot, oi, s=4)
 
-            show_or_save_plot(filename=f"rank{self.local_rank}_output_1.png", log=log)
+            show_or_save_plot(filename=f"rank{self.current_rank}_output_1.png", log=log)
 
         # Target voltages
         if hasattr(self, "voltage_monitor"):
             plt.figure()
             v_values = self.voltage_monitor.get_variable_tensor(0, "V")
             plt.plot(v_values)
-            show_or_save_plot(filename=f"rank{self.local_rank}_output_2.png", log=log)
+            show_or_save_plot(filename=f"rank{self.current_rank}_output_2.png", log=log)
 
         # Synaptic weights
         if hasattr(self, "weight_monitor"):
             plt.figure()
             w_values = self.weight_monitor.get_variable_tensor(0, "weight")
             plt.plot(w_values)
-            show_or_save_plot(filename=f"rank{self.local_rank}_output_3.png", log=log)
+            show_or_save_plot(filename=f"rank{self.current_rank}_output_3.png", log=log)
 
 
 # Main

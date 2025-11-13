@@ -135,10 +135,10 @@ class BridgeNeuronGroup(NeuronGroup):
         to_id = (self.rank + 1) * self.n_local_neurons
         subset = I[from_id:to_id]  # [n_local_neurons]
 
-        t_mod = globals.simulator.local_circuit.t % self.n_bridge_steps
+        phase = globals.simulator.local_circuit.current_step % self.n_bridge_steps
         mask = subset > 0  # [n_local_neurons]
         self._write_buffer.index_copy_(
-            1, t_mod, (self._write_buffer.index_select(1, t_mod) | mask.unsqueeze(1))
+            1, phase, (self._write_buffer.index_select(1, phase) | mask.unsqueeze(1))
         )
 
     def inject_spikes(self, spikes: torch.Tensor):
@@ -161,10 +161,10 @@ class BridgeNeuronGroup(NeuronGroup):
         to_id = (self.rank + 1) * self.n_local_neurons
         subset = spikes[from_id:to_id].bool()
 
-        t_mod = globals.simulator.local_circuit.t % self.n_bridge_steps
+        phase = globals.simulator.local_circuit.current_step % self.n_bridge_steps
         mask = subset > 0  # [n_local_neurons]
         self._write_buffer.index_copy_(
-            1, t_mod, (self._write_buffer.index_select(1, t_mod) | mask.unsqueeze(1))
+            1, phase, (self._write_buffer.index_select(1, phase) | mask.unsqueeze(1))
         )
 
     def _process(self):
@@ -177,8 +177,8 @@ class BridgeNeuronGroup(NeuronGroup):
         """
         super()._process()
 
-        t = globals.simulator.local_circuit.t
-        phase = t % self.n_bridge_steps
+        current_step = globals.simulator.local_circuit.current_step
+        phase = current_step % self.n_bridge_steps
 
         if is_distributed():
             # --- At the end of the block (n_bridge_steps-1): pack, clean, and launch async gather ---
@@ -207,7 +207,7 @@ class BridgeNeuronGroup(NeuronGroup):
                 result = torch.cat(bool_list, dim=0)
 
                 # 6) Set the spikes in the future
-                time_indices = (t + 1 + self._time_range) % self.delay_max
+                time_indices = (current_step + 1 + self._time_range) % self.delay_max
                 self._spike_buffer.index_copy_(1, time_indices, result)
 
                 # 7) Clean handle for the next block
@@ -216,7 +216,7 @@ class BridgeNeuronGroup(NeuronGroup):
         else:
             # Non-distributed mode (just load to the buffer)
             if phase == self.n_bridge_steps - 1:
-                time_indices = (t + 1 + self._time_range) % self.delay_max
+                time_indices = (current_step + 1 + self._time_range) % self.delay_max
                 self._spike_buffer.index_copy_(1, time_indices, self._write_buffer)
                 self._write_buffer.fill_(False)
 

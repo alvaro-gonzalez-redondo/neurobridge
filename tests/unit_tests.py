@@ -205,7 +205,7 @@ class TestNeurons(unittest.TestCase):
         # We just need the time variable
         Simulator.engine = DummyEngine()
         Simulator.engine.local_circuit = LocalCircuit(self.device)
-        Simulator.engine.local_circuit.t = torch.zeros(
+        Simulator.engine.local_circuit.current_step = torch.zeros(
             1, dtype=torch.long, device=self.device
         )
 
@@ -218,7 +218,7 @@ class TestNeurons(unittest.TestCase):
         group._process()
 
         # Check if neuron 10 has a spike at t=0
-        t_idx = Simulator.engine.local_circuit.t % group.delay_max
+        t_idx = Simulator.engine.local_circuit.current_step % group.delay_max
         self.assertTrue(group._spike_buffer[10, t_idx])
         self.assertFalse(torch.any(group._spike_buffer[0:10, t_idx]))
         self.assertFalse(torch.any(group._spike_buffer[11:, t_idx]))
@@ -230,11 +230,11 @@ class TestNeurons(unittest.TestCase):
         group.inject_currents(currents)
 
         # Advance time and process
-        Simulator.engine.local_circuit.t += 1
+        Simulator.engine.local_circuit.current_step += 1
         group._process()
 
         # Check if neuron 20 has a spike at the new time
-        t_idx = Simulator.engine.local_circuit.t % group.delay_max
+        t_idx = Simulator.engine.local_circuit.current_step % group.delay_max
         self.assertTrue(group._spike_buffer[20, t_idx])
 
     def test_if_neurons(self):
@@ -252,7 +252,7 @@ class TestNeurons(unittest.TestCase):
         # We just need the time variable
         Simulator.engine = DummyEngine()
         Simulator.engine.local_circuit = LocalCircuit(self.device)
-        Simulator.engine.local_circuit.t = torch.zeros(
+        Simulator.engine.local_circuit.current_step = torch.zeros(
             1, dtype=torch.long, device=self.device
         )
 
@@ -268,7 +268,7 @@ class TestNeurons(unittest.TestCase):
         group._process()
 
         # Check that no spike was generated but potential increased
-        t_idx = Simulator.engine.local_circuit.t % group.delay_max
+        t_idx = Simulator.engine.local_circuit.current_step % group.delay_max
         self.assertFalse(group._spike_buffer[10, t_idx])
         self.assertGreater(group.V[10].item(), 0.0)
 
@@ -278,11 +278,11 @@ class TestNeurons(unittest.TestCase):
         group.inject_currents(currents)
 
         # Advance time and process
-        Simulator.engine.local_circuit.t += 1
+        Simulator.engine.local_circuit.current_step += 1
         group._process()
 
         # Check if neuron 20 spiked and was reset
-        t_idx = Simulator.engine.local_circuit.t % group.delay_max
+        t_idx = Simulator.engine.local_circuit.current_step % group.delay_max
         self.assertTrue(group._spike_buffer[20, t_idx])
         self.assertEqual(group.V[20].item(), 0.0)  # Voltage should be reset
 
@@ -303,7 +303,7 @@ class TestSynapses(unittest.TestCase):
         # We just need the time variable
         Simulator.engine = DummyEngine()
         Simulator.engine.local_circuit = LocalCircuit(self.device)
-        Simulator.engine.local_circuit.t = torch.zeros(
+        Simulator.engine.local_circuit.current_step = torch.zeros(
             1, dtype=torch.long, device=self.device
         )
 

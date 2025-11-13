@@ -128,8 +128,8 @@ class NeuronGroup(SpatialGroup):
             Boolean tensor of shape (M,) with the spike status for each neuron.
 
         """
-        t_indices = (globals.simulator.local_circuit.t - 1) % self.delay_max
-        return self._spike_buffer[:, t_indices].squeeze_(1)
+        phase = (globals.simulator.local_circuit.current_step - 1) % self.delay_max
+        return self._spike_buffer[:, phase].squeeze_(1)
     
     def get_spikes_at(
         self, delays: Union[int, torch.Tensor], indices: torch.Tensor
@@ -162,13 +162,13 @@ class NeuronGroup(SpatialGroup):
         """
         if isinstance(delays, int):
             # Escalar: aplicar mismo delay a todas las conexiones
-            t_indices = (globals.simulator.local_circuit.t - delays) % self.delay_max
-            return self._spike_buffer[indices, t_indices]
+            phase = (globals.simulator.local_circuit.current_step - delays) % self.delay_max
+            return self._spike_buffer[indices, phase]
 
         # Caso tensorial
         assert delays.shape == indices.shape, "Delays and indices must match in shape"
-        t_indices = (globals.simulator.local_circuit.t - delays) % self.delay_max
-        return self._spike_buffer[indices, t_indices]
+        phase = (globals.simulator.local_circuit.current_step - delays) % self.delay_max
+        return self._spike_buffer[indices, phase]
 
     def __rshift__(self, other) -> ConnectionOperator:
         """Implement the >> operator for creating connections between neuron groups.
@@ -211,16 +211,16 @@ class ParrotNeurons(NeuronGroup):
         super()._process()
 
         # Clear any remaining spikes
-        t_idx = globals.simulator.local_circuit.t % self.delay_max
-        self._spike_buffer.index_fill_(1, t_idx, 0)
+        phase = globals.simulator.local_circuit.current_step % self.delay_max
+        self._spike_buffer.index_fill_(1, phase, 0)
 
         # Process any injected spikes
         # Store spikes in the buffer at current t
         self._spike_buffer.index_copy_(
             1,
-            t_idx,
+            phase,
             (
-                self._spike_buffer.index_select(1, t_idx)
+                self._spike_buffer.index_select(1, phase)
                 | self._input_spikes.unsqueeze(1)
             ),
         )
@@ -232,13 +232,13 @@ class ParrotNeurons(NeuronGroup):
         # Generate spikes for neurons receiving any positive current
         spikes = self._input_currents.squeeze() > 0
         self._spike_buffer.index_copy_(
-            1, t_idx, (self._spike_buffer.index_select(1, t_idx) | spikes.unsqueeze(1))
+            1, phase, (self._spike_buffer.index_select(1, phase) | spikes.unsqueeze(1))
         )
         # Clear input currents
         self._input_currents.fill_(0.0)
 
         # Save spikes
-        self.spikes.copy_(self._spike_buffer[:, t_idx].squeeze(1))
+        self.spikes.copy_(self._spike_buffer[:, phase].squeeze(1))
 
 
 class SimpleIFNeurons(NeuronGroup):
@@ -303,7 +303,7 @@ class SimpleIFNeurons(NeuronGroup):
         After spiking, the membrane potential is reset to zero.
         """
         super()._process()
-        t_idx = globals.simulator.local_circuit.t % self.delay_max
+        phase = globals.simulator.local_circuit.current_step % self.delay_max
 
         # Update potential with decay and input
         self.V *= self.decay
@@ -313,7 +313,7 @@ class SimpleIFNeurons(NeuronGroup):
         # Determine which neurons spike
         self.spikes.copy_(self.V >= self.threshold)
         self.spikes.logical_or_(self._input_spikes)
-        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
+        self._spike_buffer.index_copy_(1, phase, self.spikes.unsqueeze(1))
         self.V[self.spikes] = 0.0  # Reset membrane potential
         self._input_spikes.fill_(False)
 
@@ -376,11 +376,11 @@ class RandomSpikeNeurons(NeuronGroup):
         times the time step (in milliseconds).
         """
         super()._process()
-        t_idx = globals.simulator.local_circuit.t % self.delay_max
+        phase = globals.simulator.local_circuit.current_step % self.delay_max
 
         self.probabilities.uniform_()
         self.spikes.copy_(self.probabilities < self.firing_rate)
-        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
+        self._spike_buffer.index_copy_(1, phase, self.spikes.unsqueeze(1))
 
 
 class IFNeurons(NeuronGroup):
@@ -488,7 +488,7 @@ class IFNeurons(NeuronGroup):
         towards the weighted reversal potential E_eff.
         """
         super()._process()
-        t_idx = globals.simulator.local_circuit.t % self.delay_max
+        phase = globals.simulator.local_circuit.current_step % self.delay_max
 
         # --- Bi-exponenciales: diferencia de dos LPs con la MISMA entrada ---
         normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)  # (n_neurons, n_channels)
@@ -538,7 +538,7 @@ class IFNeurons(NeuronGroup):
         self.refrac_counter.masked_fill_(self.spikes, self.refrac_steps)
 
         # Registrar spikes y aplicar reset a E_rest tras el disparo
-        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
+        self._spike_buffer.index_copy_(1, phase, self.spikes.unsqueeze(1))
         self._V_reset_buffer.copy_(self.V)
         torch.where(self.spikes, self.E_rest.expand_as(self.V), self._V_reset_buffer, out=self.V)
 
@@ -566,7 +566,7 @@ class StochasticIFNeurons(IFNeurons):
 
     def _process(self) -> None:
         super(NeuronGroup, self)._process()  # ⚠️ saltar llamada a IFNeurons._process
-        t_idx = globals.simulator.local_circuit.t % self.delay_max
+        phase = globals.simulator.local_circuit.current_step % self.delay_max
 
         # --- Dinámica sináptica idéntica a tu versión ---
         normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)
@@ -600,7 +600,7 @@ class StochasticIFNeurons(IFNeurons):
         # Generar spikes Bernoulli(p)
         rand_vals = torch.rand_like(p_spike)
         self.spikes.copy_(rand_vals < p_spike)
-        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
+        self._spike_buffer.index_copy_(1, phase, self.spikes.unsqueeze(1))
 
         # --- 🔸 Sin reset: el voltaje sigue su dinámica continua ---
         # (opcional: ligera caída tras un spike, para evitar runaway)
@@ -633,7 +633,7 @@ class PhaseIFNeurons(IFNeurons):
         theta: float = None,         # umbral para la sigmoide; por defecto usa self.threshold
         jitter_std: float = 0.0,     # desviación típica del jitter de fase (en unidades de fase/sqrt(s))
         ahp_drop: float = 0.0,       # caída suave tras spike (ej. 0.002 => ~2 mV)
-        tau_phi: float = 0.05  # 50 ms de constante de tiempo típica
+        tau_phi: float = 0.05,       # 50 ms de constante de tiempo típica
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -653,7 +653,7 @@ class PhaseIFNeurons(IFNeurons):
     def _process(self) -> None:
         # ⚠️ No llamar a IFNeurons._process (haría reset). Llamamos al de la clase base de la jerarquía.
         super(NeuronGroup, self)._process()
-        t_idx = globals.simulator.local_circuit.t % self.delay_max
+        phase = globals.simulator.local_circuit.current_step % self.delay_max
 
         # === 1) Dinámica sináptica: igual que en IFNeurons ===
         normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)  # (n_neurons, n_channels)
@@ -715,6 +715,6 @@ class PhaseIFNeurons(IFNeurons):
         # Unimos candidatos con inyecciones externas de este paso
         self.spikes.copy_(spike_candidates | self._input_spikes)
         # Registrar en el buffer (bool por paso)
-        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
+        self._spike_buffer.index_copy_(1, phase, self.spikes.unsqueeze(1))
         # Limpiar inyección para el siguiente paso
         self._input_spikes.fill_(False)

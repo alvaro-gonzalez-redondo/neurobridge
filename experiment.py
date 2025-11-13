@@ -23,15 +23,15 @@ class Experiment:
         self.sim.initialize()
     
     @property
-    def step(self) -> int:
-        return self.sim.local_circuit.t.item()
+    def current_step(self) -> int:
+        return self.sim.local_circuit.current_step.item()
     
     @property
-    def time(self) -> float:
-        return self.sim.local_circuit.t.item() * 1e3
+    def current_time(self) -> float:
+        return self.sim.local_circuit.current_step.item() * 1e-3
 
     @property
-    def local_rank(self) -> int:
+    def current_rank(self) -> int:
         return self.sim.local_circuit.rank
     
     @property
@@ -39,7 +39,7 @@ class Experiment:
         return self.sim.world_size
     
     @property
-    def local_device(self) -> torch.device:
+    def current_device(self) -> torch.device:
         return self.sim.local_circuit.device
 
     def add_default_bridge(self, n_local_neurons: int, n_steps: int):

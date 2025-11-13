@@ -27,7 +27,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 n2e = (noise >> exc_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=StaticDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.local_device) * 2e-4,
+                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 2e-4,
                     delay=0,
                 )
 
@@ -35,7 +35,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 e2e_ampa = (exc_neurons >> exc_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=STDPDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.local_device) * 1e-6,
+                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 1e-6,
                     delay=5,
                     w_max=1e-6,
                     A_plus=1e-8, A_minus=1.2e-8, oja_decay=3e-3,
@@ -44,7 +44,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 e2e_nmda = (exc_neurons >> exc_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=STDPDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.local_device) * 1e-6,
+                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 1e-6,
                     delay=5,
                     w_max=1e-6,
                     channel=2,
@@ -55,7 +55,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 e2i = (exc_neurons >> inh_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=StaticDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.local_device) * 0.075e-4,
+                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 0.075e-4,
                     delay=0,
                 )
 
@@ -63,7 +63,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 i2e = (inh_neurons >> exc_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=StaticDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.local_device) * 1e-4,
+                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 1e-4,
                     delay=0,
                     channel=1,
                 )
@@ -72,7 +72,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 i2i = (inh_neurons >> inh_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=StaticDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.local_device) * 1e-5,
+                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 1e-5,
                     delay=1,
                     channel=1,
                 )
@@ -122,7 +122,7 @@ class BalancedRandomNetworkExperiment(Experiment):
             ax1.scatter(spk_times, spk_neurons+id_sum, s=1, label=label, c=f"C{idx}")
             n_neurons = int(self.spike_monitor.filters[idx].nonzero(as_tuple=True)[0][-1]) + 1
             id_sum += n_neurons
-            times, rate = smooth_spikes(spk_steps, n_neurons=n_neurons, to_step=self.step, sigma=0.1)
+            times, rate = smooth_spikes(spk_steps, n_neurons=n_neurons, to_step=self.current_step, sigma=0.1)
             ax0.plot(times, rate, c=f"C{idx}")
             
         ax1.legend(loc='lower right')

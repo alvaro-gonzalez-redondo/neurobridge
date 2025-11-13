@@ -12,7 +12,7 @@ class SimpleNetwork(Experiment):
 
             self.sim.connect(self.n1, self.n2, StaticSparse,
                 pattern="random",
-                delay=1,
+                delay=0,
                 weight=1,
                 #p=0.2,
                 fanin=1,#n_neurons//2,
@@ -20,7 +20,7 @@ class SimpleNetwork(Experiment):
             )
             self.sim.connect(self.n2, self.n1, StaticSparse,
                 pattern="random",
-                delay=1,
+                delay=0,
                 weight=1,
                 #p=0.2,
                 fanin=1,#n_neurons//2,
@@ -32,11 +32,11 @@ class SimpleNetwork(Experiment):
     
 
     def pre_step(self):
-        if self.time == 10:
+        if self.current_step == 10:
             initial_spikes = torch.zeros(
                 self.n1.size,
                 dtype=torch.bool,
-                device=self.local_device,
+                device=self.current_device,
             )
             initial_spikes[0] = True
             self.n1.inject_spikes(initial_spikes)
@@ -44,17 +44,17 @@ class SimpleNetwork(Experiment):
 
     def pos_step(self):
         spk_buf = self.n1.get_spike_buffer()
-        phase = (self.time-1) % self.n1.delay_max
+        phase = (self.current_step-1) % self.n1.delay_max
         spks = spk_buf[:, phase].squeeze().tolist()
         spks_str = "".join(["|" if spk else "_" for spk in spks])
 
         spk_buf = self.n2.get_spike_buffer()
-        phase = (self.time-1) % self.n2.delay_max
+        phase = (self.current_step-1) % self.n2.delay_max
         spks = spk_buf[:, phase].squeeze().tolist()
         spks_str += " - " + "".join(["|" if spk else "_" for spk in spks])
         
-        log(f"t={self.time:<5}: {spks_str}")
-    
+        log(f"t={self.current_time:<5.3f}: {spks_str}")
+
 
     def on_finish(self):
         #monitor: SpikeMonitor = self.spike_monitor

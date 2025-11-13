@@ -52,7 +52,7 @@ class LocalCircuit(GPUNode):
         Bridge for inter-GPU communication, if any.
     """
 
-    t: torch.Tensor
+    current_step: torch.Tensor
     
     rank: int
 
@@ -73,7 +73,7 @@ class LocalCircuit(GPUNode):
             The rank of the GPU for this circuit.
         """
         super().__init__(device)
-        self.t = torch.zeros(1, dtype=torch.long, device=self.device)
+        self.current_step = torch.zeros(1, dtype=torch.long, device=self.device)
         self.rank = rank
         self.graph_root = CUDAGraphSubTree(device=self.device)
         self.graph = torch.cuda.CUDAGraph()
@@ -276,14 +276,14 @@ class Simulator(Node):
         # Warming up the CUDA graph
         self.local_circuit.graph_root._call_ready()
         self.local_circuit.graph_root._call_process()
-        self.local_circuit.t += 1
+        self.local_circuit.current_step += 1
         self.local_circuit.graph_root._call_process()
-        self.local_circuit.t += 1
+        self.local_circuit.current_step += 1
 
         # Capturing the graph
         with torch.cuda.graph(self.local_circuit.graph, stream=self.local_circuit.graph_stream):
             self.local_circuit.graph_root._call_process()
-        self.local_circuit.t.zero_()
+        self.local_circuit.current_step.zero_()
 
     def step(self):
         """Advance the simulation by one time step.
@@ -294,7 +294,7 @@ class Simulator(Node):
         """
         self.local_circuit.graph.replay()
         self._call_process()
-        self.local_circuit.t += 1
+        self.local_circuit.current_step += 1
 
     def connect_edges(
         self,

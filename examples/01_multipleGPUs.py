@@ -35,14 +35,14 @@ class PingPongRingExperiment(Experiment):
             local_neurons = ParrotNeurons(n_neurons, delay_max=20)
 
             # Envía a la siguiente GPU (o a sí misma si está sola)
-            (local_neurons >> bridge.where_rank(self.local_rank))(
+            (local_neurons >> bridge.where_rank(self.current_rank))(
                 pattern="one-to-one",
                 delay=0,
                 weight=1.0,
             )
 
             # Recibe de la GPU anterior (o de sí misma si está sola)
-            (bridge.where_rank((self.local_rank - 1) % self.world_size) >> local_neurons)(
+            (bridge.where_rank((self.current_rank - 1) % self.world_size) >> local_neurons)(
                 pattern="one-to-one",
                 delay=0,
                 weight=1.0,
@@ -58,27 +58,27 @@ class PingPongRingExperiment(Experiment):
 
     def pre_step(self):
         # En la primera neurona (rank 0), inyectar un spike inicial para comenzar la actividad
-        if self.local_rank == 0:
+        if self.current_rank == 0:
             if (
-                self.step >= self.start_at
-                and self.step < self.local_neurons.size + self.start_at
+                self.current_step >= self.start_at
+                and self.current_step < self.local_neurons.size + self.start_at
             ):
                 initial_spikes = torch.zeros(
                     self.local_neurons.size,
                     dtype=torch.bool,
-                    device=self.local_device,
+                    device=self.current_device,
                 )
-                initial_spikes[self.step - self.start_at] = True
+                initial_spikes[self.current_step - self.start_at] = True
                 self.local_neurons.inject_spikes(initial_spikes)
 
 
     def pos_step(self):
         # Imprimimos los últimos spikes de la población neuronal
         spk_buf = self.local_neurons.get_spike_buffer()
-        phase = (self.step-1) % self.local_neurons.delay_max
+        phase = (self.current_step-1) % self.local_neurons.delay_max
         spks = spk_buf[:, phase].squeeze().tolist()
         spks_str = "".join(["|" if spk else "_" for spk in spks])
-        log(f"t={self.step:<5}: {spks_str}")
+        log(f"t={self.current_step:<5}: {spks_str}")
 
 
     def on_finish(self):
@@ -86,7 +86,7 @@ class PingPongRingExperiment(Experiment):
         cpu_spikes = monitor.get_spike_tensor(0).cpu()
         ot, oi = cpu_spikes[:, 1], cpu_spikes[:, 0]
         plt.scatter(ot, oi, s=4)
-        show_or_save_plot(filename=f"rank{self.local_rank}_output.png", log=log)
+        show_or_save_plot(filename=f"rank{self.current_rank}_output.png", log=log)
 
     
 # Main

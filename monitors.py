@@ -56,11 +56,11 @@ class SpikeMonitor(Node):
         based on each group's delay_max parameter.
         """
         super()._process()
-        t = globals.simulator.local_circuit.t.item()
+        current_step = globals.simulator.local_circuit.current_step.item()
         for i, (group, filter) in enumerate(zip(self.groups, self.filters)):
             delay_max = group.delay_max
 
-            if (t % delay_max) != (delay_max - 1):
+            if (current_step % delay_max) != (delay_max - 1):
                 continue
 
             buffer = group.get_spike_buffer()  # shape: [N, D]
@@ -73,7 +73,7 @@ class SpikeMonitor(Node):
             neuron_ids = neuron_ids[is_filtered]
 
             delay_slots = spike_indices[:, 1][is_filtered]
-            times = globals.simulator.local_circuit.t - delay_max + delay_slots +1 #TODO: Check if this +1 is really necessary to avoid negative time values
+            times = globals.simulator.local_circuit.current_step - delay_max + delay_slots +1 #TODO: Check if this +1 is really necessary to avoid negative time values
 
             spikes_tensor = torch.stack(
                 [neuron_ids, times], dim=1
@@ -279,14 +279,11 @@ class RingBufferSpikeMonitor(Node):
         """
         super()._process()
 
-        t = (
-            globals.simulator.local_circuit.t
-        )  # Keep t as tensor for CUDA graph compatibility
-
+        current_step = globals.simulator.local_circuit.current_step
         for i, (group, mask) in enumerate(zip(self.groups, self.filter_masks)):
             delay_max = group.delay_max
 
-            if (t % delay_max) != (delay_max - 1):
+            if (current_step % delay_max) != (delay_max - 1):
                 continue
 
             buffer = group.get_spike_buffer()  # shape [N, D]
@@ -304,7 +301,7 @@ class RingBufferSpikeMonitor(Node):
             if neuron_ids.numel() == 0:
                 continue
 
-            times = t - delay_max + delay_slots
+            times = current_step - delay_max + delay_slots
             new_spikes = torch.stack([neuron_ids, times], dim=1)  # [M, 2]
             M = new_spikes.shape[0]
 
