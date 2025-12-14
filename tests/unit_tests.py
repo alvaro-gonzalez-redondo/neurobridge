@@ -114,7 +114,7 @@ class TestGroup(unittest.TestCase):
         group = Group(size=size, device=self.device)
 
         # Filter even indices
-        filtered = group.where_id(lambda ids: ids % 2 == 0)
+        filtered = group.where_idx(lambda ids: ids % 2 == 0)
 
         # Original group should not be modified
         self.assertTrue(torch.all(group.filter))
@@ -128,7 +128,7 @@ class TestGroup(unittest.TestCase):
 
         # Test invalid filter function
         with self.assertRaises(ValueError):
-            group.where_id(lambda ids: ids)  # Not returning a boolean mask
+            group.where_idx(lambda ids: ids)  # Not returning a boolean mask
 
         # Test reset_filter
         filtered.reset_filter()
@@ -152,7 +152,7 @@ class TestGroup(unittest.TestCase):
         self.assertLess(filtered.filter.sum().item(), size)
 
         # Test combined filtering
-        combined = filtered.where_id(lambda ids: ids < size // 2)
+        combined = filtered.where_idx(lambda ids: ids < size // 2)
         self.assertLessEqual(combined.filter.sum().item(), filtered.filter.sum().item())
         self.assertLessEqual(combined.filter.sum().item(), size // 2)
 

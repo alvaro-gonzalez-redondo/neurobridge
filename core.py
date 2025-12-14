@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .neurons import NeuronGroup
-from typing import Optional, Type, Any
+from typing import Optional, Type, Any, List
 
 from . import globals
 
@@ -106,8 +106,9 @@ class Node:
 
     children: List[Node]
     parent: Optional[Node]
+    name: str
 
-    def __init__(self):
+    def __init__(self, name=None):
         """Initialize a new _Node.
 
         If created within a _ParentStack context, the node will automatically
@@ -119,6 +120,8 @@ class Node:
         parent = ParentStack.current_parent()
         if parent is not None:
             parent.add_child(self)
+        
+        self.name = name
 
     def add_child(self, node: Node) -> None:
         """Add a child node to this node.
@@ -201,7 +204,7 @@ class GPUNode(Node):
 
     device: torch.device
 
-    def __init__(self, device: str = None):
+    def __init__(self, device: str = None, **kwargs):
         """Initialize a new _GPUNode.
 
         Parameters
@@ -210,7 +213,7 @@ class GPUNode(Node):
             String representation of the GPU device (e.g., 'cuda:0').
             This will be converted to a torch.device.
         """
-        super().__init__()
+        super().__init__(**kwargs)
 
         if device is None:
             parent = ParentStack.current_parent()

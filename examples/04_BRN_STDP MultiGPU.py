@@ -25,10 +25,10 @@ class BalancedRandomNetworkExperiment(Experiment):
             noise = RandomSpikeNeurons(n_neurons=n_noise_neurons, firing_rate=5.0)
 
             # Neuronas excitadoras
-            exc_neurons = IFNeurons(n_neurons=n_excitatory_neurons)
+            exc_neurons = LIFNeurons(n_neurons=n_excitatory_neurons)
 
             # Neuronas inhibitorias
-            inh_neurons = IFNeurons(n_neurons=n_inhibitory_neurons)
+            inh_neurons = LIFNeurons(n_neurons=n_inhibitory_neurons)
 
             # Conexiones
             n2e: StaticDense = (noise >> exc_neurons)(
@@ -84,15 +84,15 @@ class BalancedRandomNetworkExperiment(Experiment):
             # Monitorizamos un subconjunto de neuronas de cada grupo
             self.spike_monitor = SpikeMonitor(
                 [
-                    noise.where_id(lambda i: i < 100),
-                    exc_neurons.where_id(lambda i: i < 100),
-                    inh_neurons.where_id(lambda i: i < 100),
+                    noise.where_idx(lambda i: i < 100),
+                    exc_neurons.where_idx(lambda i: i < 100),
+                    inh_neurons.where_idx(lambda i: i < 100),
                 ]
             )
 
             self.state_monitor = VariableMonitor(
                 [
-                    exc_neurons.where_id(lambda i: i<3),
+                    exc_neurons.where_idx(lambda i: i<3),
                 ],
                 ['V']
             )

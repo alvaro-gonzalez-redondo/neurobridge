@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Union
 
 from . import globals
+from .utils import RandomDistribution
 
 from .core import ConnectionOperator
 from .group import SpatialGroup
@@ -29,11 +30,14 @@ class NeuronGroup(SpatialGroup):
     """
 
     delay_max: torch.Tensor #[1]
+    delay_max_int: int
     _spike_buffer: torch.Tensor #[neuron, delay]
     _input_currents: torch.Tensor #[neuron, channel]
     n_channels: int
     _input_spikes: torch.Tensor #[neuron]
     spikes: torch.Tensor #[neuron] Output spikes in this time step.
+    dYdt: torch.Tensor       # (n_neurons,) Added for learning rules
+
 
     def __init__(
         self,
@@ -42,6 +46,7 @@ class NeuronGroup(SpatialGroup):
         delay_max: int = 20,
         n_channels: int = 1,
         device: torch.device = None,
+        **kwargs,
     ):
         """Initialize a group of neurons.
 
@@ -56,8 +61,9 @@ class NeuronGroup(SpatialGroup):
         delay_max : int, optional
             Maximum delay in time steps for spike propagation, by default 20.
         """
-        super().__init__(n_neurons, spatial_dimensions, device)
+        super().__init__(n_neurons, spatial_dimensions, device, **kwargs)
         self.delay_max = torch.tensor([delay_max], dtype=torch.long, device=self.device)
+        self.delay_max_int = delay_max
         self._spike_buffer = torch.zeros(
             (n_neurons, delay_max), dtype=torch.bool, device=self.device
         )
@@ -69,6 +75,7 @@ class NeuronGroup(SpatialGroup):
             n_neurons, dtype=torch.bool, device=self.device
         )
         self.spikes = torch.zeros(n_neurons, dtype=torch.bool, device=self.device)
+        self.dYdt = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
 
     def get_spike_buffer(self):
         """Get the internal spike buffer.
@@ -128,8 +135,8 @@ class NeuronGroup(SpatialGroup):
             Boolean tensor of shape (M,) with the spike status for each neuron.
 
         """
-        phase = (globals.simulator.local_circuit.current_step - 1) % self.delay_max
-        return self._spike_buffer[:, phase].squeeze_(1)
+        phase = (globals.simulator.local_circuit.current_step - 1) % self.delay_max_int
+        return self._spike_buffer[:, phase].squeeze(1)
     
     def get_spikes_at(
         self, delays: Union[int, torch.Tensor], indices: torch.Tensor
@@ -162,12 +169,12 @@ class NeuronGroup(SpatialGroup):
         """
         if isinstance(delays, int):
             # Escalar: aplicar mismo delay a todas las conexiones
-            phase = (globals.simulator.local_circuit.current_step - delays) % self.delay_max
+            phase = (globals.simulator.local_circuit.current_step - delays) % self.delay_max_int
             return self._spike_buffer[indices, phase]
 
         # Caso tensorial
         assert delays.shape == indices.shape, "Delays and indices must match in shape"
-        phase = (globals.simulator.local_circuit.current_step - delays) % self.delay_max
+        phase = (globals.simulator.local_circuit.current_step - delays) % self.delay_max_int
         return self._spike_buffer[indices, phase]
 
     def __rshift__(self, other) -> ConnectionOperator:
@@ -211,7 +218,7 @@ class ParrotNeurons(NeuronGroup):
         super()._process()
 
         # Clear any remaining spikes
-        phase = globals.simulator.local_circuit.current_step % self.delay_max
+        phase = globals.simulator.local_circuit.current_step % self.delay_max_int
         self._spike_buffer.index_fill_(1, phase, 0)
 
         # Process any injected spikes
@@ -303,7 +310,7 @@ class SimpleIFNeurons(NeuronGroup):
         After spiking, the membrane potential is reset to zero.
         """
         super()._process()
-        phase = globals.simulator.local_circuit.current_step % self.delay_max
+        phase = globals.simulator.local_circuit.current_step % self.delay_max_int
 
         # Update potential with decay and input
         self.V *= self.decay
@@ -333,15 +340,17 @@ class RandomSpikeNeurons(NeuronGroup):
     """
 
     firing_rate: torch.Tensor  # In Hz
+    previous_fr: torch.Tensor
     probabilities: torch.Tensor
 
     def __init__(
         self,
         n_neurons: int,
-        firing_rate: float = 10.0,
+        firing_rate: Union[float, torch.Tensor] = 10.0,
         spatial_dimensions: int = 2,
         delay_max: int = 20,
         device: str = None,
+        **kwargs,
     ):
         """Initialize a random spike generator neuron group.
 
@@ -363,10 +372,16 @@ class RandomSpikeNeurons(NeuronGroup):
             spatial_dimensions = spatial_dimensions,
             delay_max = delay_max,
             device = device,
+            **kwargs,
         )
-        self.firing_rate = torch.tensor(
-            firing_rate * 1e-3, dtype=torch.float32, device=self.device
-        )
+        
+        if isinstance(firing_rate, torch.Tensor):
+            fr = firing_rate.to(device=self.device, dtype=torch.float32)
+        else:
+            fr = torch.tensor(firing_rate, device=self.device, dtype=torch.float32)
+        self.firing_rate = torch.full((n_neurons,), fr, device=self.device, dtype=torch.float32)
+        self.previous_fr = torch.full((n_neurons,), fr, device=self.device, dtype=torch.float32)
+
         self.probabilities = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
 
     def _process(self):
@@ -376,45 +391,328 @@ class RandomSpikeNeurons(NeuronGroup):
         times the time step (in milliseconds).
         """
         super()._process()
-        phase = globals.simulator.local_circuit.current_step % self.delay_max
-
+        
+        phase = globals.simulator.local_circuit.current_step % self.delay_max_int
         self.probabilities.uniform_()
-        self.spikes.copy_(self.probabilities < self.firing_rate)
+        self.spikes.copy_(self.probabilities < (self.firing_rate*1e-3))
         self._spike_buffer.index_copy_(1, phase, self.spikes.unsqueeze(1))
 
+        self.dYdt = (self.firing_rate - self.previous_fr) / 1e-3
+        self.previous_fr.copy_(self.firing_rate)
 
-class IFNeurons(NeuronGroup):
-    """Integrate-and-Fire neurons with multi-channel conductance-based dynamics.
 
-    Uses analytical integration for membrane potential to avoid overshoots and
-    ensure unconditional stability. Each channel has bi-exponential conductance
-    dynamics (rise/decay) and a reversal potential.
+class ConductanceNeuronBase(NeuronGroup):
+    """Base para neuronas con dinámica conductance-based multicanal.
 
-    The membrane potential evolves according to:
-        Cm·dV/dt = -g_leak·(V - E_rest) - Σᵢ gᵢ·(V - Eᵢ)
+    Implementa:
+    - Canales sinápticos bi-exponenciales (rise/decay) por canal.
+    - Integración analítica del potencial de membrana:
+        Cm dV/dt = -g_leak (V - E_rest) - Σ g_i (V - E_rev_i)
 
-    which is integrated exactly using:
-        V(t+dt) = E_eff + (V - E_eff)·exp(-g_eff·dt/Cm)
-    where g_eff = g_leak + Σᵢ gᵢ and E_eff is the weighted reversal potential.
+      ⇒ V(t+dt) = E_eff + (V - E_eff) * exp(-g_eff * dt / Cm)
+
+    NO define:
+    - cómo se generan los spikes,
+    - refractario,
+    - reset de membrana.
     """
 
-    V: torch.Tensor
-    threshold: torch.Tensor
-    E_rest: torch.Tensor
-    E_channels: torch.Tensor
-    channel_states: torch.Tensor  # (n_neurons, n_channels, 2)
-    channel_currents: torch.Tensor  # (n_neurons, n_channels) - for monitoring only
-    channel_decay_factors: torch.Tensor  # (n_channels, 2)
-    channel_normalization: torch.Tensor  # (n_channels,)
-    input_channels: torch.Tensor  # (n_neurons, n_channels)
-    _V_reset_buffer: torch.Tensor
-    refrac_counter: torch.Tensor  # Absolute refractory period counter
-    refrac_steps: int  # Number of steps for refractory period
+    V: torch.Tensor          # (n_neurons,)
+    E_rest: torch.Tensor     # (n_neurons,)
+    E_rev: torch.Tensor      # (n_channels,)
+    E_rev_row: torch.Tensor  # (1, n_channels) para broadcast
 
-    # Physical parameters for analytical integration
-    dt: float  # Timestep in seconds
-    Cm: float  # Membrane capacitance (normalized to 1.0)
-    g_leak: float  # Leak conductance
+    channel_states: torch.Tensor      # (n_neurons, n_channels, 2) [rise, decay]
+    channel_currents: torch.Tensor    # (n_neurons, n_channels)
+    decay_factors: torch.Tensor       # (n_channels, 2) [rise, decay]
+    norm_factors: torch.Tensor        # (n_channels,)
+
+    dt: float
+    Cm: float
+    g_leak: float
+    dt_over_Cm: float
+
+    def __init__(
+        self,
+        n_neurons: int,
+        spatial_dimensions: int,
+        delay_max: int,
+        n_channels: int,
+        channel_time_constants: list[tuple[float, float]],
+        channel_reversal_potentials: list[float],
+        tau_membrane: float,
+        E_rest: float,
+        dt: float = 1e-3,
+        device: str | torch.device | None = None,
+        **kwargs
+    ):
+        super().__init__(
+            n_neurons=n_neurons,
+            spatial_dimensions=spatial_dimensions,
+            delay_max=delay_max,
+            n_channels=n_channels,
+            device=device,
+            **kwargs
+        )
+
+        assert len(channel_time_constants) == n_channels
+        assert len(channel_reversal_potentials) == n_channels
+
+        # Parámetros físicos
+        self.dt = float(dt)
+        self.Cm = float(tau_membrane)
+        self.g_leak = 1.0
+        self.dt_over_Cm = self.dt / self.Cm
+
+        # Estado de membrana: E_rest vectorial por si quieres homeostasis por neurona
+        self.V = torch.full(
+            (n_neurons,),
+            E_rest,
+            dtype=torch.float32,
+            device=self.device,
+        )
+    
+        self.E_rest = torch.full(
+            (n_neurons,),
+            E_rest,
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        # Canales sinápticos
+        tau_rise = torch.tensor(
+            [tc[0] for tc in channel_time_constants],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        tau_decay = torch.tensor(
+            [tc[1] for tc in channel_time_constants],
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        self.decay_factors = torch.stack(
+            [
+                torch.exp(-self.dt / tau_rise),
+                torch.exp(-self.dt / tau_decay),
+            ],
+            dim=1,
+        )  # (n_channels, 2) [rise, decay]
+
+        self.norm_factors = (tau_decay - tau_rise) / (tau_decay * tau_rise)
+
+        self.channel_states = torch.zeros(
+            n_neurons,
+            n_channels,
+            2,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self.channel_currents = torch.zeros(
+            n_neurons,
+            n_channels,
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        self.E_rev = torch.tensor(
+            channel_reversal_potentials,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self.E_rev_row = self.E_rev.unsqueeze(0)  # (1, n_channels)
+
+    # ----- Dinámica común -----
+
+    def _update_channels(self) -> None:
+        """Actualiza estados bi-exponenciales de los canales."""
+        # Entrada normalizada
+        normalized_input = self._input_currents.mul(
+            self.norm_factors.unsqueeze(0)
+        )  # (n_neurons, n_channels)
+        self._input_currents.zero_()
+
+        # Decaimiento rise/decay
+        self.channel_states[:, :, 0].mul_(self.decay_factors[:, 0])  # rise
+        self.channel_states[:, :, 1].mul_(self.decay_factors[:, 1])  # decay
+
+        # Inyección de entrada en ambas ramas
+        self.channel_states[:, :, 0].add_(normalized_input)
+        self.channel_states[:, :, 1].add_(normalized_input)
+
+    def _integrate_membrane(self) -> None:
+        """Calcula conductancias y actualiza V analíticamente."""
+        # g_i >= 0
+        g_channels = torch.relu_(self.channel_states[:, :, 1] - self.channel_states[:, :, 0])
+        # Corrientes por canal (solo monitorización)
+        self.channel_currents[:] = g_channels * (self.E_rev_row - self.V.unsqueeze(1))
+
+        # Integración analítica
+        g_syn = g_channels.sum(dim=1)
+        g_eff = g_syn.add(self.g_leak)  # (n_neurons,)
+
+        E_eff_num = self.g_leak * self.E_rest + (g_channels * self.E_rev_row).sum(dim=1)
+        E_eff = E_eff_num / g_eff
+
+        # --- Derivada analítica dV/dt (antes de actualizar V)
+        # dV/dt = -(g_eff/Cm) * (V - E_eff)
+        # Y como self.dt_over_Cm = dt/Cm → (g_eff/Cm) = g_eff * (dt_over_Cm/dt)
+        self.dYdt[:] = g_eff * (E_eff - self.V) * (self.dt_over_Cm / self.dt)
+
+        exp_term = torch.exp(-g_eff * self.dt_over_Cm)
+        # V = V * exp + E_eff * (1 - exp)
+        self.V.mul_(exp_term).add_(E_eff * (1.0 - exp_term))
+
+    def _integrate_step(self) -> None:
+        """Paso completo de integración de canales + membrana."""
+        self._update_channels()
+        self._integrate_membrane()
+
+    def _write_spikes_to_buffer(self, t_idx: int) -> None:
+        self._spike_buffer.index_copy_(1, t_idx, self.spikes.unsqueeze(1))
+
+    def _process(self) -> None:
+        """Solo despacha el _process del NeuronGroup."""
+        super()._process()
+        # Cada subclase decide cuándo llamar a _integrate_step() y cómo generar spikes.
+
+
+class IFDeterministicBase(ConductanceNeuronBase):
+    """Base para neuronas IF deterministas con:
+    - threshold por neurona,
+    - refractario duro,
+    - reset a E_rest,
+    - hooks de adaptación (ALIF, etc.).
+    """
+
+    threshold: torch.Tensor          # (n_neurons,)
+    threshold_base: torch.Tensor | None
+    refrac_counter: torch.Tensor
+    refrac_steps: int
+
+    def __init__(
+        self,
+        n_neurons: int,
+        spatial_dimensions: int,
+        delay_max: int,
+        n_channels: int,
+        channel_time_constants: list[tuple[float, float]],
+        channel_reversal_potentials: list[float],
+        tau_membrane: float,
+        E_rest: float,
+        threshold: float,
+        tau_refrac: float,
+        dt: float = 1e-3,
+        device: str | torch.device | None = None,
+        **kwargs
+    ):
+        super().__init__(
+            n_neurons=n_neurons,
+            spatial_dimensions=spatial_dimensions,
+            delay_max=delay_max,
+            n_channels=n_channels,
+            channel_time_constants=channel_time_constants,
+            channel_reversal_potentials=channel_reversal_potentials,
+            tau_membrane=tau_membrane,
+            E_rest=E_rest,
+            dt=dt,
+            device=device,
+            **kwargs
+        )
+
+        # Threshold por neurona (aunque inicialmente sea constante)
+        self.threshold = torch.full(
+            (n_neurons,),
+            float(threshold),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self.threshold_base = None  # las subclases (ALIF) pueden usarlo
+
+        # Refractario
+        self.refrac_steps = int(tau_refrac / self.dt)
+        self.refrac_counter = torch.zeros(
+            n_neurons,
+            dtype=torch.int32,
+            device=self.device,
+        )
+
+        self._V_reset_buffer = torch.empty_like(self.V)
+
+    # Hooks de adaptación
+
+    def _update_adaptation_state(self) -> None:
+        """Por defecto no hay adaptación."""
+        pass
+
+    def _update_threshold(self) -> None:
+        """Por defecto threshold fijo."""
+        pass
+
+    def _on_spikes(self, spike_mask: torch.Tensor) -> None:
+        """Hook tras spike (ALIF lo usa para incrementar adaptación)."""
+        pass
+
+    def _process(self) -> None:
+        super()._process()
+        t_idx = globals.simulator.local_circuit.current_step % self.delay_max_int
+
+        # 1) Integración canales + membrana
+        self._integrate_step()
+
+        # 2) Adaptación + threshold
+        self._update_adaptation_state()
+        self._update_threshold()
+
+        # 3) Refractario + detección de spikes
+        self.refrac_counter.sub_(1).clamp_(min=0)
+        not_refractory = self.refrac_counter.eq(0)
+
+        self.spikes[:] = self.V >= self.threshold
+        self.spikes.logical_and_(not_refractory)
+        self.spikes.logical_or_(self._input_spikes)
+
+        self.refrac_counter.masked_fill_(self.spikes, self.refrac_steps)
+
+        # 4) Buffer de spikes
+        self._write_spikes_to_buffer(t_idx)
+
+        # 5) Reset + hook
+        spk = self.spikes
+        if spk.any():
+            self.V[spk] = self.E_rest[spk]
+            self._on_spikes(spk)
+
+        self._input_spikes.fill_(False)
+
+
+class ContinuousNoResetBase(ConductanceNeuronBase):
+    """Base para neuronas sin reset ni refractario.
+
+    - Integran membrana continuamente (conductance-based).
+    - Cada subclase define cómo generar self.spikes.
+    - No se altera V tras los spikes (salvo que la subclase lo haga explícitamente).
+    """
+
+    def _generate_spikes(self, t_idx: int) -> None:
+        """Debe escribir self.spikes y llamar a _write_spikes_to_buffer(t_idx)."""
+        raise NotImplementedError
+
+    def _process(self) -> None:
+        super()._process()
+        t_idx = globals.simulator.local_circuit.current_step % self.delay_max_int
+
+        # Integración multicanal + membrana
+        self._integrate_step()
+
+        # Generación de spikes según el modelo concreto
+        self._generate_spikes(t_idx)
+
+        self._input_spikes.fill_(False)
+
+
+class LIFNeurons(IFDeterministicBase):
+    """LIF clásico multicanal con integración analítica y refractario duro."""
 
     def __init__(
         self,
@@ -423,298 +721,323 @@ class IFNeurons(NeuronGroup):
         delay_max: int = 20,
         n_channels: int = 3,
         channel_time_constants: list[tuple[float, float]] = (
-            (0.001, 0.005),  # AMPA: subida 1ms, caída 5ms
-            (0.001, 0.010),  # GABA: subida 1ms, caída 10ms
-            (0.002, 0.100),  # NMDA: subida 2ms, caída 100ms
+            (0.001, 0.005),  # AMPA
+            (0.001, 0.010),  # GABA
+            (0.002, 0.100),  # NMDA
         ),
         channel_reversal_potentials: list[float] = (
-            0.0,     # AMPA: 0 mV
-            -0.070,  # GABA: -70 mV
-            0.0,     # NMDA: 0 mV
+            0.0,     # AMPA
+            -0.070,  # GABA
+            0.0,     # NMDA
         ),
-        threshold: float = -0.050,   # -50 mV
-        tau_membrane: float = 0.010, # 10 ms
-        E_rest: float = -0.065,      # -65 mV
-        tau_refrac: float = 0.002,   # 2 ms absolute refractory period
-        device: str = None,
+        threshold: float = -0.050,
+        tau_membrane: float = 0.010,
+        E_rest: float = -0.065,
+        tau_refrac: float = 0.002,
+        dt: float = 1e-3,
+        device: str | torch.device | None = None,
+        **kwargs,
     ):
         super().__init__(
-            n_neurons = n_neurons,
-            spatial_dimensions = spatial_dimensions,
-            delay_max = delay_max,
-            n_channels = n_channels,
-            device = device)
+            n_neurons=n_neurons,
+            spatial_dimensions=spatial_dimensions,
+            delay_max=delay_max,
+            n_channels=n_channels,
+            channel_time_constants=channel_time_constants,
+            channel_reversal_potentials=channel_reversal_potentials,
+            tau_membrane=tau_membrane,
+            E_rest=E_rest,
+            threshold=threshold,
+            tau_refrac=tau_refrac,
+            dt=dt,
+            device=device,
+            **kwargs
+        )
 
-        assert len(channel_time_constants) == n_channels
-        assert len(channel_reversal_potentials) == n_channels
+    def _update_adaptation_state(self) -> None:
+        pass
 
-        # Physical parameters for analytical integration
-        # Scale Cm and g_leak together to maintain tau_membrane while keeping
-        # g_leak comparable to synaptic conductances (which are in weight units)
-        self.dt = 1e-3          # 1 ms per timestep
-        self.Cm = tau_membrane  # Capacitance scaled to match tau (e.g., 0.01 for 10ms)
-        self.g_leak = 1.0       # Normalized leak conductance (comparable to weight scales)
+    def _update_threshold(self) -> None:
+        # threshold ya es fijo, no cambiamos nada
+        pass
 
-        self.V = torch.full((n_neurons,), E_rest, dtype=torch.float32, device=self.device)
-        self._V_reset_buffer = torch.empty_like(self.V)
-        self.threshold = torch.tensor([threshold], dtype=torch.float32, device=self.device)
-
-        tau_rise = torch.tensor([tc[0] for tc in channel_time_constants], dtype=torch.float32, device=self.device)
-        tau_decay = torch.tensor([tc[1] for tc in channel_time_constants], dtype=torch.float32, device=self.device)
-
-        self.channel_decay_factors = torch.stack([
-            torch.exp(-self.dt / tau_rise),
-            torch.exp(-self.dt / tau_decay)
-        ], dim=1)  # (n_channels, 2)
-
-        self.channel_normalization = (tau_decay - tau_rise) / (tau_decay * tau_rise)
-
-        self.channel_states = torch.zeros(n_neurons, n_channels, 2, dtype=torch.float32, device=self.device)
-        self.input_channels = torch.zeros(n_neurons, n_channels, dtype=torch.float32, device=self.device)
-        self.channel_currents = torch.zeros(n_neurons, n_channels, dtype=torch.float32, device=self.device)
-
-        self.E_rest = torch.tensor([E_rest], dtype=torch.float32, device=self.device)
-        self.E_channels = torch.tensor(channel_reversal_potentials, dtype=torch.float32, device=self.device)
-
-        # Absolute refractory period (prevents unrealistic firing rates)
-        self.refrac_steps = int(tau_refrac / self.dt)  # Convert to timesteps
-        self.refrac_counter = torch.zeros(n_neurons, dtype=torch.int32, device=self.device)
-
-    def _process(self) -> None:
-        """Updates internal states, integrates dynamics and generates spikes.
-
-        Uses analytical integration for unconditional stability and to avoid
-        voltage overshoots. The membrane potential converges exponentially
-        towards the weighted reversal potential E_eff.
-        """
-        super()._process()
-        phase = globals.simulator.local_circuit.current_step % self.delay_max
-
-        # --- Bi-exponenciales: diferencia de dos LPs con la MISMA entrada ---
-        normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)  # (n_neurons, n_channels)
-        self._input_currents.zero_()
-
-        # Decaimiento por componente
-        self.channel_states[:, :, 0].mul_(self.channel_decay_factors[:, 0])  # rise
-        self.channel_states[:, :, 1].mul_(self.channel_decay_factors[:, 1])  # decay
-
-        # La entrada debe sumarse a AMBAS componentes
-        self.channel_states[:, :, 0].add_(normalized_input)
-        self.channel_states[:, :, 1].add_(normalized_input)
-
-        # Conductancia de canal: g_i = relu(decay - rise) >= 0
-        g_channels = torch.relu(self.channel_states[:, :, 1] - self.channel_states[:, :, 0])  # (n_neurons, n_channels)
-
-        # Corriente de canal (g_i * (E_i - V)) - stored for monitoring only
-        channel_drive = self.E_channels.unsqueeze(0) - self.V.unsqueeze(1)  # (n_neurons, n_channels)
-        self.channel_currents.copy_(g_channels * channel_drive)
-
-        # --- ANALYTICAL INTEGRATION (conductance-based, unconditionally stable) ---
-        # Total synaptic conductance
-        g_syn = g_channels.sum(dim=1)  # (n_neurons,)
-
-        # Effective conductance: leak + synaptic
-        g_eff = g_syn + self.g_leak  # (n_neurons,)
-
-        # Effective reversal potential: weighted by conductances
-        # E_eff = (g_leak*E_rest + sum_i g_i*E_i) / g_eff
-        E_eff_num = self.g_leak * self.E_rest + (g_channels * self.E_channels).sum(dim=1)
-        E_eff = E_eff_num / g_eff
-
-        # Exact solution of linear ODE: V(t+dt) = E_eff + (V - E_eff) * exp(-g_eff * dt / Cm)
-        exp_term = torch.exp(-g_eff * (self.dt / self.Cm))
-        self.V.copy_(E_eff + (self.V - E_eff) * exp_term)
-
-        # Decrementar contador refractario (clamp a 0)
-        self.refrac_counter.sub_(1).clamp_(min=0)
-
-        # Generación de spikes: solo si V >= threshold Y no está en periodo refractario
-        spike_candidates = self.V >= self.threshold
-        not_refractory = self.refrac_counter == 0
-        self.spikes.copy_(spike_candidates & not_refractory)
-        self.spikes.logical_or_(self._input_spikes)
-
-        # Resetear contador refractario para neuronas que dispararon
-        self.refrac_counter.masked_fill_(self.spikes, self.refrac_steps)
-
-        # Registrar spikes y aplicar reset a E_rest tras el disparo
-        self._spike_buffer.index_copy_(1, phase, self.spikes.unsqueeze(1))
-        self._V_reset_buffer.copy_(self.V)
-        torch.where(self.spikes, self.E_rest.expand_as(self.V), self._V_reset_buffer, out=self.V)
-
-        # Limpiar spikes inyectados
-        self._input_spikes.fill_(False)
+    def _on_spikes(self, spike_mask: torch.Tensor) -> None:
+        pass
 
 
-class StochasticIFNeurons(IFNeurons):
-    """Integrate-and-Fire neurons without reset, with stochastic spike generation.
-
-    The membrane potential decays continuously; spikes are emitted
-    probabilistically as a smooth function of V relative to threshold.
+class ALIFNeurons(IFDeterministicBase):
+    """ALIF multicanal:
+    - Misma dinámica conductance-based que LIF.
+    - Adaptación de umbral: threshold_i = threshold_base + beta_i * A_i.
     """
 
-    def __init__(self, *args, beta: float = 200.0, **kwargs):
-        """
-        beta : float
-            Steepness of the sigmoid that converts voltage into spike probability.
-            Larger beta -> more deterministic firing.
-        """
-        super().__init__(*args, **kwargs)
-        self.beta = beta
-        # Eliminamos el uso del contador refractario (ya no se necesita un reset duro)
-        self.refrac_counter.zero_()
+    A: torch.Tensor
+    tau_adapt: torch.Tensor
+    beta: torch.Tensor
+    alpha_adapt: torch.Tensor
 
-    def _process(self) -> None:
-        super(NeuronGroup, self)._process()  # ⚠️ saltar llamada a IFNeurons._process
-        phase = globals.simulator.local_circuit.current_step % self.delay_max
+    def __init__(
+        self,
+        n_neurons: int,
+        spatial_dimensions: int = 2,
+        delay_max: int = 20,
+        n_channels: int = 3,
+        channel_time_constants: list[tuple[float, float]] = (
+            (0.001, 0.005),
+            (0.001, 0.010),
+            (0.002, 0.100),
+        ),
+        channel_reversal_potentials: list[float] = (
+            0.0,
+            -0.070,
+            0.0,
+        ),
+        threshold: float = -0.050,
+        tau_membrane: float = 0.010,
+        E_rest: float = -0.065,
+        tau_refrac: float = 0.002,
+        tau_adapt=200e-3,  # float, tensor (n,) o RandomDistribution
+        beta=1.7e-3,        # float, tensor (n,) o RandomDistribution
+        dt: float = 1e-3,
+        device: str | torch.device | None = None,
+    ):
+        super().__init__(
+            n_neurons=n_neurons,
+            spatial_dimensions=spatial_dimensions,
+            delay_max=delay_max,
+            n_channels=n_channels,
+            channel_time_constants=channel_time_constants,
+            channel_reversal_potentials=channel_reversal_potentials,
+            tau_membrane=tau_membrane,
+            E_rest=E_rest,
+            threshold=threshold,
+            tau_refrac=tau_refrac,
+            dt=dt,
+            device=device,
+        )
 
-        # --- Dinámica sináptica idéntica a tu versión ---
-        normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)
-        self._input_currents.zero_()
+        # tau_adapt
+        if isinstance(tau_adapt, RandomDistribution):
+            self.tau_adapt = tau_adapt.sample(n_neurons, self.device).to(
+                dtype=torch.float32
+            )
+        elif isinstance(tau_adapt, torch.Tensor):
+            if tau_adapt.shape != (n_neurons,):
+                raise ValueError(
+                    f"tau_adapt tensor must have shape ({n_neurons},), got {tau_adapt.shape}"
+                )
+            self.tau_adapt = tau_adapt.to(self.device, dtype=torch.float32)
+        else:
+            self.tau_adapt = torch.full(
+                (n_neurons,),
+                float(tau_adapt),
+                dtype=torch.float32,
+                device=self.device,
+            )
 
-        self.channel_states[:, :, 0].mul_(self.channel_decay_factors[:, 0])
-        self.channel_states[:, :, 1].mul_(self.channel_decay_factors[:, 1])
-        self.channel_states[:, :, 0].add_(normalized_input)
-        self.channel_states[:, :, 1].add_(normalized_input)
+        # beta
+        if isinstance(beta, RandomDistribution):
+            self.beta = beta.sample(n_neurons, self.device).to(dtype=torch.float32)
+        elif isinstance(beta, torch.Tensor):
+            if beta.shape != (n_neurons,):
+                raise ValueError(
+                    f"beta tensor must have shape ({n_neurons},), got {beta.shape}"
+                )
+            self.beta = beta.to(self.device, dtype=torch.float32)
+        else:
+            self.beta = torch.full(
+                (n_neurons,),
+                float(beta),
+                dtype=torch.float32,
+                device=self.device,
+            )
 
-        g_channels = torch.relu(self.channel_states[:, :, 1] - self.channel_states[:, :, 0])
-        channel_drive = self.E_channels.unsqueeze(0) - self.V.unsqueeze(1)
-        self.channel_currents.copy_(g_channels * channel_drive)
+        self.alpha_adapt = torch.exp(-self.dt / self.tau_adapt)
+        self.A = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
 
-        g_syn = g_channels.sum(dim=1)
-        g_eff = g_syn + self.g_leak
-        E_eff_num = self.g_leak * self.E_rest + (g_channels * self.E_channels).sum(dim=1)
-        E_eff = E_eff_num / g_eff
+        # Guardamos threshold_base (vector) y usamos threshold como vector mutable
+        self.threshold_base = self.threshold.clone()
 
-        exp_term = torch.exp(-g_eff * (self.dt / self.Cm))
-        self.V.copy_(E_eff + (self.V - E_eff) * exp_term)
+    def _update_adaptation_state(self) -> None:
+        self.A.mul_(self.alpha_adapt)
 
-        # --- 🔸 NUEVA PARTE: generación de spikes estocástica ---
-        # Probabilidad instantánea de spike: sigmoide del voltaje
-        #   p = σ(β(V - V_th)) * dt_scale
-        # dt_scale ajusta la probabilidad a segundos (asumiendo dt en segundos)
-        target_firing_rate = 20.0
-        dt_scale = 1e-3  # o self.dt si quieres interpretar p por segundo
-        p_spike = torch.sigmoid(self.beta * (self.V - self.threshold)) * dt_scale * target_firing_rate
+    def _update_threshold(self) -> None:
+        self.threshold[:] = self.threshold_base + self.beta * self.A
 
-        # Generar spikes Bernoulli(p)
-        rand_vals = torch.rand_like(p_spike)
-        self.spikes.copy_(rand_vals < p_spike)
-        self._spike_buffer.index_copy_(1, phase, self.spikes.unsqueeze(1))
-
-        # --- 🔸 Sin reset: el voltaje sigue su dinámica continua ---
-        # (opcional: ligera caída tras un spike, para evitar runaway)
-        #self.V.sub_(self.spikes.float() * 0.002)  # caída suave opcional de 2 mV
-
-        # Limpiar spikes inyectados
-        self._input_spikes.fill_(False)
+    def _on_spikes(self, spike_mask: torch.Tensor) -> None:
+        if spike_mask.any():
+            self.A[spike_mask] += 1.0
 
 
-class PhaseIFNeurons(IFNeurons):
-    """IF sin reset con disparo determinista vía integración de fase.
-    
-    La tasa instantánea r(V) se obtiene con un umbral suave (sigmoide) y
-    se integra como dphi/dt = r(V). Se emite spike cuando phi >= 1.
-    No hay reset del potencial: V sigue su dinámica continua.
+class StochasticIFNeurons(ContinuousNoResetBase):
+    """Neurona IF sin reset con disparo estocástico Bernoulli por paso.
+
+    r(V) = target_rate * σ(beta * (V - threshold))
+    p_spike = r(V) * dt
+    """
+
+    def __init__(
+        self,
+        n_neurons: int,
+        spatial_dimensions: int = 2,
+        delay_max: int = 20,
+        n_channels: int = 3,
+        channel_time_constants: list[tuple[float, float]] = (
+            (0.001, 0.005),
+            (0.001, 0.010),
+            (0.002, 0.100),
+        ),
+        channel_reversal_potentials: list[float] = (
+            0.0,
+            -0.070,
+            0.0,
+        ),
+        threshold: float = -0.050,
+        tau_membrane: float = 0.010,
+        E_rest: float = -0.065,
+        beta: float = 200.0,
+        target_rate: float = 20.0,  # Hz
+        dt: float = 1e-3,
+        device: str | torch.device | None = None,
+    ):
+        super().__init__(
+            n_neurons=n_neurons,
+            spatial_dimensions=spatial_dimensions,
+            delay_max=delay_max,
+            n_channels=n_channels,
+            channel_time_constants=channel_time_constants,
+            channel_reversal_potentials=channel_reversal_potentials,
+            tau_membrane=tau_membrane,
+            E_rest=E_rest,
+            dt=dt,
+            device=device,
+        )
+
+        self.beta = float(beta)
+        self.target_rate = float(target_rate)
+
+        self.threshold = torch.full(
+            (n_neurons,),
+            float(threshold),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+    def _generate_spikes(self, t_idx: int) -> None:
+        # r(V) en Hz y p = r * dt
+        r = self.target_rate * torch.sigmoid(self.beta * (self.V - self.threshold))
+        p = r * self.dt
+
+        self.spikes[:] = torch.rand(self.spikes.shape, device=self.device) < p
+        self._write_spikes_to_buffer(t_idx)
+
+
+class PhaseIFNeurons(ContinuousNoResetBase):
+    """Neurona IF sin reset con disparo determinista vía integración de fase.
+
+    r(V) = r_max * σ(beta * (V - theta))
+    phi ← phi * phi_decay + r(V) * dt + ruido
+    spike si phi >= 1 (se drena la parte entera).
     """
 
     phase: torch.Tensor
     beta: float
+    r: torch.Tensor
     r_max: float
     theta: torch.Tensor
     jitter_std: float
     ahp_drop: float
+    phi_decay: float
 
     def __init__(
         self,
-        *args,
-        beta: float = 200.0,         # “dureza” del umbral suave
-        r_max: float = 300.0,        # Hz, tasa máxima (seguridad/clip)
-        theta: float = None,         # umbral para la sigmoide; por defecto usa self.threshold
-        jitter_std: float = 0.0,     # desviación típica del jitter de fase (en unidades de fase/sqrt(s))
-        ahp_drop: float = 0.0,       # caída suave tras spike (ej. 0.002 => ~2 mV)
-        tau_phi: float = 0.05,       # 50 ms de constante de tiempo típica
-        **kwargs,
+        n_neurons: int,
+        spatial_dimensions: int = 2,
+        delay_max: int = 20,
+        n_channels: int = 3,
+        channel_time_constants: list[tuple[float, float]] = (
+            (0.001, 0.005),
+            (0.001, 0.010),
+            (0.002, 0.100),
+        ),
+        channel_reversal_potentials: list[float] = (
+            0.0,
+            -0.070,
+            0.0,
+        ),
+        threshold: float = -0.050,   # referencia base
+        tau_membrane: float = 0.010,
+        E_rest: float = -0.065,
+        beta: float = 200.0,
+        r_max: float = 300.0,
+        theta: float | None = None,  # si None, usar threshold
+        jitter_std: float = 0.0,
+        ahp_drop: float = 0.0,
+        tau_phi: float = 0.05,
+        dt: float = 1e-3,
+        device: str | torch.device | None = None,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            n_neurons=n_neurons,
+            spatial_dimensions=spatial_dimensions,
+            delay_max=delay_max,
+            n_channels=n_channels,
+            channel_time_constants=channel_time_constants,
+            channel_reversal_potentials=channel_reversal_potentials,
+            tau_membrane=tau_membrane,
+            E_rest=E_rest,
+            dt=dt,
+            device=device,
+        )
+
         self.beta = float(beta)
         self.r_max = float(r_max)
-        self.theta = self.threshold.clone() if theta is None else torch.tensor([theta], dtype=torch.float32, device=self.device)
         self.jitter_std = float(jitter_std)
         self.ahp_drop = float(ahp_drop)
-        self.phi_decay = torch.exp(-self.dt / tau_phi)
-        # Fase inicial
+        self.phi_decay = float(torch.exp(torch.tensor(-self.dt / tau_phi)))
+
+        # Threshold base para referencia (no se usa directamente en spikes)
+        self.threshold = torch.full(
+            (n_neurons,),
+            float(threshold),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        theta_val = threshold if theta is None else theta
+        self.theta = torch.full(
+            (n_neurons,),
+            float(theta_val),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
         self.phase = torch.zeros_like(self.V)
-        # El refractario “duro” ya no se usa; lo dejamos en cero
-        if hasattr(self, "refrac_counter"):
-            self.refrac_counter.zero_()
+        self.r = torch.zeros_like(self.V)
 
-    @torch.no_grad()
-    def _process(self) -> None:
-        # ⚠️ No llamar a IFNeurons._process (haría reset). Llamamos al de la clase base de la jerarquía.
-        super(NeuronGroup, self)._process()
-        phase = globals.simulator.local_circuit.current_step % self.delay_max
+    def _generate_spikes(self, t_idx: int) -> None:
+        # r(V) en Hz
+        self.r = self.r_max * torch.sigmoid(self.beta * (self.V - self.theta))
 
-        # === 1) Dinámica sináptica: igual que en IFNeurons ===
-        normalized_input = self._input_currents * self.channel_normalization.unsqueeze(0)  # (n_neurons, n_channels)
-        self._input_currents.zero_()
+        # φ ← φ * decay + r * dt
+        self.phase.mul_(self.phi_decay).add_(self.r * self.dt)
 
-        # Decaimiento bi-exponencial
-        self.channel_states[:, :, 0].mul_(self.channel_decay_factors[:, 0])  # rise
-        self.channel_states[:, :, 1].mul_(self.channel_decay_factors[:, 1])  # decay
-        # Inyección a ambas ramas
-        self.channel_states[:, :, 0].add_(normalized_input)
-        self.channel_states[:, :, 1].add_(normalized_input)
-
-        # g_i >= 0
-        g_channels = torch.relu(self.channel_states[:, :, 1] - self.channel_states[:, :, 0])  # (n_neurons, n_channels)
-
-        # Solo para monitorización (como en tu clase)
-        channel_drive = self.E_channels.unsqueeze(0) - self.V.unsqueeze(1)
-        self.channel_currents.copy_(g_channels * channel_drive)
-
-        # === 2) Integración analítica del voltaje (sin reset) ===
-        g_syn = g_channels.sum(dim=1)                      # (n,)
-        g_eff = g_syn + self.g_leak                        # (n,)
-        E_eff_num = self.g_leak * self.E_rest + (g_channels * self.E_channels).sum(dim=1)
-        E_eff = E_eff_num / g_eff
-        exp_term = torch.exp(-g_eff * (self.dt / self.Cm))
-        self.V.copy_(E_eff + (self.V - E_eff) * exp_term)
-
-        # === 3) Tasa instantánea y avance de fase ===
-        # r(V) = r_max * sigmoid(beta*(V - theta))
-        # Nota: r se interpreta en Hz, dt en segundos -> incremento de fase = r * dt
-        r = self.r_max * torch.sigmoid(self.beta * (self.V - self.theta))  # (n,)
-        self.phase.add_(r * self.dt)
-
-        # Avance de fase con decaimiento
-        self.phase.mul_(self.phi_decay)
-        self.phase.add_(r * self.dt)
-
-        # Jitter opcional en fase (evita sincronías demasiado rígidas)
+        # Ruido opcional en la fase (para romper sincronías rígidas)
         if self.jitter_std > 0.0:
-            # Escala ~ sqrt(dt) para ruido blanco en tiempo continuo
-            self.phase.add_(torch.randn_like(self.phase) * (self.jitter_std * (self.dt ** 0.5)))
+            self.phase.add_(
+                torch.randn_like(self.phase) * (self.jitter_std * (self.dt ** 0.5))
+            )
 
-        # === 4) Detección de spikes por sobrepaso de 1 ciclo de fase ===
-        # Contabilizamos potencialmente múltiples cruces en un dt (r*dt > 1),
-        # pero el buffer es booleano por paso, así que solo marcamos True si hubo >=1.
-        n_spikes_float = torch.floor(torch.clamp_min(self.phase, 0.0))
-        spike_candidates = n_spikes_float >= 1.0
+        # Número de vueltas completas de fase
+        self.phase.clamp_min_(0.0)
+        n_spikes = self.phase.floor()
+        self.spikes[:] = n_spikes >= 1.0
 
-        # Drenamos fase en bloque (equivalente a while phi>=1: phi-=1)
-        self.phase.sub_(n_spikes_float)
+        # Drenar fase entera
+        self.phase.sub_(n_spikes)
 
-        # AHP suave opcional (baja un poco V hacia E_rest tras disparo)
+        # AHP suave opcional
         if self.ahp_drop > 0.0:
-            # Aplicamos caída solo donde hubo spike
-            # (V <- V - ahp_drop) o, más fisiológico: V <- V - ahp_drop*(V - E_rest)
-            self.V.sub_(spike_candidates.float() * self.ahp_drop)
+            self.V.sub_(self.spikes.float() * self.ahp_drop)
 
-        # === 5) Inyección de spikes externos y escritura del buffer ===
-        # Unimos candidatos con inyecciones externas de este paso
-        self.spikes.copy_(spike_candidates | self._input_spikes)
-        # Registrar en el buffer (bool por paso)
-        self._spike_buffer.index_copy_(1, phase, self.spikes.unsqueeze(1))
-        # Limpiar inyección para el siguiente paso
-        self._input_spikes.fill_(False)
+        self._write_spikes_to_buffer(t_idx)

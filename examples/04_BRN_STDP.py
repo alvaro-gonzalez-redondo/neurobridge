@@ -20,22 +20,21 @@ class BalancedRandomNetworkExperiment(Experiment):
         #with self.sim.autoparent("graph"):
         with self.sim.autoparent("normal"):
             noise = RandomSpikeNeurons(n_neurons=n_noise_neurons, firing_rate=5.0)
-            exc_neurons = IFNeurons(n_neurons=n_excitatory_neurons)
-            inh_neurons = IFNeurons(n_neurons=n_inhibitory_neurons)
+            exc_neurons = LIFNeurons(n_neurons=n_excitatory_neurons)
+            inh_neurons = LIFNeurons(n_neurons=n_inhibitory_neurons)
 
             if True:
                 n2e = (noise >> exc_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=StaticDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 2e-4,
-                    delay=0,
+                    weight=Uniform(0.0, 1e-3), delay=0,
                 )
 
             if True:
                 e2e_ampa = (exc_neurons >> exc_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=STDPDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 1e-6,
+                    weight=Uniform(0.0, 1e-6),
                     delay=5,
                     w_max=1e-6,
                     A_plus=1e-8, A_minus=1.2e-8, oja_decay=3e-3,
@@ -44,7 +43,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 e2e_nmda = (exc_neurons >> exc_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=STDPDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 1e-6,
+                    weight=Uniform(0.0, 1e-6),
                     delay=5,
                     w_max=1e-6,
                     channel=2,
@@ -55,7 +54,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 e2i = (exc_neurons >> inh_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=StaticDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 0.075e-4,
+                    weight=Uniform(0.0, 4e-4),
                     delay=0,
                 )
 
@@ -63,7 +62,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 i2e = (inh_neurons >> exc_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=StaticDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 1e-4,
+                    weight=Uniform(0.0, 1e-4),
                     delay=0,
                     channel=1,
                 )
@@ -72,7 +71,7 @@ class BalancedRandomNetworkExperiment(Experiment):
                 i2i = (inh_neurons >> inh_neurons)(
                     pattern="random", p=self.conn_prob,
                     synapse_class=StaticDense,
-                    weight=lambda pre_idx, tgt_idx, pre_pos, tgt_pos: torch.rand(pre_idx.numel(), device=self.current_device) * 1e-5,
+                    weight=Uniform(0.0, 1e-5),
                     delay=1,
                     channel=1,
                 )
@@ -83,14 +82,14 @@ class BalancedRandomNetworkExperiment(Experiment):
             # Monitorizamos un subconjunto de neuronas de cada grupo
             self.spike_monitor = SpikeMonitor(
                 [
-                    noise.where_id(lambda i: i < 100),
-                    exc_neurons.where_id(lambda i: i < 100),
-                    inh_neurons.where_id(lambda i: i < 100),
+                    noise.where_idx(lambda i: i < 100),
+                    exc_neurons.where_idx(lambda i: i < 100),
+                    inh_neurons.where_idx(lambda i: i < 100),
                 ]
             )
 
             self.state_monitor = VariableMonitor(
-                [exc_neurons.where_id(lambda i: i<1),],
+                [exc_neurons.where_idx(lambda i: i<1),],
                 ['V', 'spikes', 'channel_currents@0', 'channel_currents@1', 'channel_currents@2']
             )
 
@@ -127,7 +126,7 @@ class BalancedRandomNetworkExperiment(Experiment):
             
         ax1.legend(loc='lower right')
         plt.title(f"Spikes of different subpopulations")
-        plt.xlabel("Time (steps)")
+        plt.xlabel("Time (seconds)")
         ax0.set_ylabel("Spiking rate (Hz)")
         ax1.set_ylabel("Neuron ID")
 

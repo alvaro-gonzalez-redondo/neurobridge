@@ -45,7 +45,7 @@ class RandomInputExperiment(Experiment):
             with self.sim.autoparent("normal"):
                 if self.is_monitoring:
                     self.spike_monitor = SpikeMonitor(
-                        [src_neurons.where_id(lambda ids: ids < 20)]
+                        [src_neurons.where_idx(lambda ids: ids < 20)]
                     )
 
         elif self.current_rank == 1:
@@ -66,13 +66,13 @@ class RandomInputExperiment(Experiment):
             with self.sim.autoparent("normal"):
                 if self.is_monitoring:
                     self.spike_monitor = SpikeMonitor(
-                        [tgt_neurons.where_id(lambda ids: ids < 20)]
+                        [tgt_neurons.where_idx(lambda ids: ids < 20)]
                     )
                     self.voltage_monitor = VariableMonitor(
-                        [tgt_neurons.where_id(lambda ids: ids < 20)], ["V"]
+                        [tgt_neurons.where_idx(lambda ids: ids < 20)], ["V"]
                     )
                     self.weight_monitor = VariableMonitor(
-                        [stdp_conns.where_id(lambda ids: ids < 20)], ["weight"]
+                        [stdp_conns.where_idx(lambda ids: ids < 20)], ["weight"]
                     )
 
     def on_finish(self):

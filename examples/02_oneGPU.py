@@ -37,17 +37,17 @@ class RandomInputExperiment(Experiment):
                 if True:
                     self.spike_monitor = SpikeMonitor(
                         [
-                            src_neurons.where_id(
+                            src_neurons.where_idx(
                                 lambda i: i < 20
                             ),  # src_neurons.where_id(lambda i: i%10==0),
-                            tgt_neurons.where_id(
+                            tgt_neurons.where_idx(
                                 lambda i: i < 20
                             ),  # tgt_neurons.where_pos(lambda p: p[:,0]>0.5)
                         ]
                     )
                 if True:
                     self.voltage_monitor = VariableMonitor(
-                        [tgt_neurons.where_id(lambda ids: ids < 10)], ["V"]
+                        [tgt_neurons.where_idx(lambda ids: ids < 10)], ["V"]
                     )
                     self.weight_monitor = VariableMonitor(
                         [stdp_conns.where_id(lambda ids: ids < 100)], ["weight"]

@@ -30,7 +30,7 @@ class Group(GPUNode):
     size: int
     filter: torch.Tensor
 
-    def __init__(self, size: int, device: torch.device = None):
+    def __init__(self, size: int, device: torch.device = None, **kwargs):
         """Initialize a new Group.
 
         Parameters
@@ -40,7 +40,7 @@ class Group(GPUNode):
         size : int
             Number of elements in the group.
         """
-        super().__init__(device)
+        super().__init__(device, **kwargs)
         self.size = size
         self.filter = torch.ones(self.size, dtype=torch.bool, device=self.device)
 
@@ -58,7 +58,7 @@ class Group(GPUNode):
         clone.filter = clone.filter.clone()
         return clone
 
-    def where_id(self, condition: Callable[[torch.Tensor], torch.Tensor]) -> Group:
+    def where_idx(self, condition: Callable[[torch.Tensor], torch.Tensor]) -> Group:
         """Filter the group based on element indices.
 
         Applies a vectorized filtering operation based on element indices.
@@ -156,7 +156,7 @@ class SpatialGroup(Group):
     spatial_dimensions: torch.Tensor
     positions: torch.Tensor
 
-    def __init__(self, size: int, spatial_dimensions: int = 2, device: torch.device = None):
+    def __init__(self, size: int, spatial_dimensions: int = 2, device: torch.device = None, **kwargs):
         """Initialize a new SpatialGroup.
 
         Parameters
@@ -168,7 +168,7 @@ class SpatialGroup(Group):
         spatial_dimensions : int, optional
             Number of spatial dimensions, by default 2.
         """
-        super().__init__(size=size, device=device)
+        super().__init__(size=size, device=device, **kwargs)
         self.spatial_dimensions = torch.tensor(
             spatial_dimensions, dtype=torch.long, device=self.device
         )

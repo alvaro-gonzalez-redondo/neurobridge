@@ -90,7 +90,7 @@ class Experiment:
             "`build_network` in `Experiment` must be implemented."
         )
     
-    def on_start(self) -> None:
+    def on_start(self, **kwargs) -> None:
         pass
 
     def pre_step(self) -> None:
@@ -102,11 +102,19 @@ class Experiment:
     def on_finish(self) -> None:
         pass
 
-    def run(self, steps:int) -> None:
+    def run(self, time:float=None, steps:int=None) -> None:
         """Runs the current experiment.
         """
+        if time is None:
+            if steps is None:
+                raise RuntimeError("Set time length or number of steps of the simulation.")
+            else:
+                steps = steps
+        else:
+            steps = int(time*1000)
+
         try:
-            self.on_start()
+            self.on_start(total_steps=steps)
             for t in tqdm(range(steps)):
                 self.pre_step()
                 self.sim.step()
