@@ -5,7 +5,17 @@ from .neurons import NeuronGroup
 
 import copy
 import torch
-from typing import Callable, Optional
+from typing import Callable, Iterable, Tuple, Union
+
+
+DenseIndexCondition = Union[
+    Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    Tuple[int, int],
+    Iterable[Tuple[int, int]],
+    torch.Tensor,  # shape (K, 2)
+    dict,          # {'rows': ..., 'cols': ...}
+]
+
 
 class Dense(GPUNode):
     """Base class for dense matrix representations between two groups.
@@ -58,23 +68,97 @@ class Dense(GPUNode):
 
     # --- Funciones de Filtrado (Lambda) ---
 
-    def where_idx(self, condition: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]) -> 'Dense':
-        """Filter connections based on indices (i, j). update self.filter"""
-        clone = self._clone_with_new_filter()
-        
-        rows = torch.arange(self.shape[0], device=self.device)
-        cols = torch.arange(self.shape[1], device=self.device)
-        
-        # Meshgrid para pasar (i, j) a la lambda
-        grid_rows, grid_cols = torch.meshgrid(rows, cols, indexing='ij')
-        
-        selection_mask = condition(grid_rows, grid_cols)
-        
-        if selection_mask.shape != self.shape:
-             raise ValueError(f"Lambda must return mask of shape {self.shape}")
+    def where_idx(self, condition: DenseIndexCondition) -> "Dense":
+        """
+        Filter dense connections based on indices (i, j).
+        Updates clone.filter = clone.filter & new_mask
 
-        # Actualizamos FILTER, no mask
-        clone.filter &= selection_mask
+        Use examples:
+        # 1. Callable (clásico)
+        dense.where_idx(lambda i, j: i == j)          # diagonal
+        dense.where_idx(lambda i, j: (i + j) % 2 == 0)
+
+        # 2. Índice único
+        dense.where_idx((3, 7))
+
+        # 3. Índices explícitos
+        dense.where_idx([(0, 1), (4, 2), (9, 9)])
+
+        # 4. Filtrado estructural
+        dense.where_idx({'rows': [0, 1, 2], 'cols': [5, 6]})
+        """
+
+        clone = self._clone_with_new_filter()
+        device = self.device
+        N, M = self.shape
+
+        # ---- Case 1: callable (i, j) -> mask ----
+        if callable(condition):
+            rows = torch.arange(N, device=device)
+            cols = torch.arange(M, device=device)
+            grid_i, grid_j = torch.meshgrid(rows, cols, indexing="ij")
+
+            mask = condition(grid_i, grid_j)
+
+            if not isinstance(mask, torch.Tensor):
+                raise TypeError("Callable must return a torch.Tensor")
+
+            if mask.shape != (N, M) or mask.dtype != torch.bool:
+                raise ValueError(
+                    f"Callable must return bool mask of shape ({N}, {M}), "
+                    f"got {mask.shape} with dtype {mask.dtype}"
+                )
+
+        # ---- Case 2: single (i, j) index ----
+        elif isinstance(condition, tuple) and len(condition) == 2:
+            i, j = condition
+            if not (0 <= i < N and 0 <= j < M):
+                raise IndexError(f"Index {(i, j)} out of bounds for shape {self.shape}")
+
+            mask = torch.zeros((N, M), dtype=torch.bool, device=device)
+            mask[i, j] = True
+
+        # ---- Case 3: list / tensor of (i, j) ----
+        elif isinstance(condition, (list, tuple, torch.Tensor)):
+            indices = torch.as_tensor(condition, device=device)
+
+            if indices.ndim != 2 or indices.shape[1] != 2:
+                raise ValueError("Index list must have shape (K, 2)")
+
+            if indices.dtype not in (torch.int32, torch.int64):
+                raise TypeError("Indices must be integers")
+
+            if torch.any(indices[:, 0] < 0) or torch.any(indices[:, 0] >= N) \
+            or torch.any(indices[:, 1] < 0) or torch.any(indices[:, 1] >= M):
+                raise IndexError("Some indices are out of bounds")
+
+            mask = torch.zeros((N, M), dtype=torch.bool, device=device)
+            mask[indices[:, 0], indices[:, 1]] = True
+
+        # ---- Case 4: rows / cols dict (optional but powerful) ----
+        elif isinstance(condition, dict):
+            rows = condition.get("rows", None)
+            cols = condition.get("cols", None)
+
+            mask = torch.ones((N, M), dtype=torch.bool, device=device)
+
+            if rows is not None:
+                rows = torch.as_tensor(rows, device=device)
+                row_mask = torch.zeros(N, dtype=torch.bool, device=device)
+                row_mask[rows] = True
+                mask &= row_mask[:, None]
+
+            if cols is not None:
+                cols = torch.as_tensor(cols, device=device)
+                col_mask = torch.zeros(M, dtype=torch.bool, device=device)
+                col_mask[cols] = True
+                mask &= col_mask[None, :]
+
+        else:
+            raise TypeError(f"Unsupported condition type: {type(condition)}")
+
+        # Combine with existing filter
+        clone.filter &= mask
         return clone
 
     def where_pos(self, condition: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]) -> 'Dense':
