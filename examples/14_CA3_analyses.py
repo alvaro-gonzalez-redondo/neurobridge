@@ -7,16 +7,72 @@ from typing import Dict, List
 
 class CA3Experiment(Experiment):
     # Estructura general de la red
-    n_inputs: int = 160
+    n_noise: int = 100
+    n_inputs: int = 200
+    n_excitatory: int = 1000
+    n_inhibitory: int = 100
+
+    # Parámtros de las neuronas
+    noise_firing_rate: float = 15.0
+
+    pc_params: Dict = {
+        'tau_membrane': 0.041793503480278424,
+        'E_leak': -0.07519,      # EL: Potencial de reposo físico
+        'v_reset': -0.02974,     # Vr: Potencial tras el disparo
+        'v_rheobase': -0.02442,  # VT: Umbral de inicio de la exponencial
+        'v_peak': 0.0,      # Nivel de corte para detectar el spike
+        'delta_T': 0.00423,      # Factor de pendiente
+        'a': -0.06264501160092809,              # Adaptación sub-umbral (nS si gL fuera real)
+        'b': 0.047990719257540615,            # Adaptación activada por disparos (pA)
+        'tau_w': 0.08493,        # Constante de tiempo de w
+        'n_channels': 3,
+        'channel_time_constants': [(0.00130, 0.0095), (0.0003, 0.0033), (0.002, 0.02)],
+    }
+
+    pvbc_params: Dict = {
+        'tau_membrane': 0.015781624500665777,
+        'E_leak': -0.07474,      # EL: Potencial de reposo físico
+        'v_reset': -0.06499,     # Vr: Potencial tras el disparo
+        'v_rheobase': -0.057710000000000004,  # VT: Umbral de inicio de la exponencial
+        'v_peak': 0.0,      # Nivel de corte para detectar el spike
+        'delta_T': 0.00458,      # Factor de pendiente
+        'a': 0.40612516644474034,              # Adaptación sub-umbral (nS si gL fuera real)
+        'b': 0.00012117177097203729,            # Adaptación activada por disparos (pA)
+        'tau_w': 0.178580,        # Constante de tiempo de w
+        'n_channels': 2,
+        'channel_time_constants': [(0.0005, 0.002), (0.0005, 0.005)],
+        'channel_reversal_potentials': [0.0, -0.07],        
+    }
 
     # Parámetros de las conexiones
-    noi2exc_params = {'fanin':5,  'weight':Constant(5e-4), 'delay':UniformInt(0,19)}
+    norm_target = 5e-3
+    lr = norm_target * 5e-3
+    static_params = {'connection_type':StaticSparse}
+    stdp_params = {'connection_type':STDPSparseNormalized, 'w_max':1.0, 'A_plus':lr, 'A_minus':-lr*1.2, 'norm_every':100, 'norm_target':norm_target}
+
+    noi2exc_conn =     {**static_params, 'pattern':"random", 'fanin':5,   'weight':Constant(1e-3),     'delay':UniformInt(0,19)}
+    inp2exc_conn =     {**stdp_params,   'pattern':"random", 'fanin':100, 'weight':Uniform(0.0, 2e-4), 'delay':UniformInt(0,19)}
+    inp2inh_conn =     {**static_params, 'pattern':"random", 'fanin':50,  'weight':Uniform(0.0, 2e-4), 'delay':Constant(0)}
+
+    exc2inh_conn =     {**static_params, 'pattern':"random", 'fanin':50,  'weight':Uniform(0.0, 5e-4), 'delay':Constant(0)}
+    inh2exc_sta_conn = {**static_params, 'pattern':"random", 'fanin':10,  'weight':Uniform(0.0, 1e-3), 'delay':Constant(0),      'channel':1}
+
     
     def build_network(self):
+        
         with self.sim.autoparent("normal"):
             # Capas
-            self.noi_neurons:RandomSpikeNeurons = RandomSpikeNeurons(n_neurons=self.n_inputs, firing_rate=10.0, name='Noise')
-            self.inp_neurons:RandomSpikeNeurons = RandomSpikeNeurons(n_neurons=self.n_inputs, firing_rate=15.0, name='Input')
+            self.noi_neurons:RandomSpikeNeurons = RandomSpikeNeurons(n_neurons=self.n_noise, firing_rate=self.noise_firing_rate, name='Noise')
+            self.inp_neurons:RandomSpikeNeurons = RandomSpikeNeurons(n_neurons=self.n_inputs, firing_rate=0.0, name='Input')
+            self.pc_neurons:AdExNeurons = AdExNeurons(self.n_excitatory, name='PC', **self.pc_params)
+            self.pvbc_neurons:AdExNeurons = AdExNeurons(self.n_inhibitory, name='PVBC', **self.pvbc_params)
+
+            # Conexiones
+            self.noi2exc:StaticSparse = self.sim.connect(self.noi_neurons, self.pc_neurons, **self.noi2exc_conn)
+            self.inp2exc:StaticSparse = self.sim.connect(self.inp_neurons, self.pc_neurons, **self.inp2exc_conn)
+            self.inp2inh:StaticSparse = self.sim.connect(self.inp_neurons, self.pvbc_neurons, **self.inp2inh_conn)
+            self.exc2inh:StaticSparse = self.sim.connect(self.pc_neurons, self.pvbc_neurons, **self.exc2inh_conn)
+            self.inh2exc_sta:StaticSparse = self.sim.connect(self.pvbc_neurons, self.pc_neurons, **self.inh2exc_sta_conn)
 
         with self.sim.autoparent("normal"):
 
@@ -27,19 +83,29 @@ class CA3Experiment(Experiment):
 
             self.rt_spikes = RealtimeSpikeMonitor(
                 groups = [
-                    self.inp_neurons.where_idx(lambda i: (0<=i) & (i<50) ), 
+                    self.inp_neurons.where_idx( lambda i: (0<=i) & (i<50) ),
+                    self.pc_neurons.where_idx(  lambda i: (0<=i) & (i<50) ),
+                    self.pvbc_neurons.where_idx(lambda i: (0<=i) & (i<50) ),
                 ],
                 viz_client=self.viz, 
                 plot_id="raster_1",
                 rollover_spikes=2_000,
             )
 
+            self.rt_weights_inp2exc = RealtimeVariableMonitor(
+                groups=[self.inp2exc.where_idx( lambda i: i<20 ),],
+                variable_names=["weight"], viz_client=self.viz, plot_id="w_inp2exc", interval=50,rollover=200,
+            )                
+
+
             # ---
 
             # Monitorización estática
             self.spike_monitor = SpikeMonitor(
                 [
-                    self.inp_neurons.where_idx(lambda i: i<50),     #0
+                    self.inp_neurons.where_idx( lambda i: i<50 ),   #0
+                    self.pc_neurons.where_idx(  lambda i: i<50 ),   #1
+                    self.pvbc_neurons.where_idx(lambda i: i<50 ),   #2
                 ]
             )
     
@@ -56,6 +122,7 @@ class CA3Experiment(Experiment):
         inputs = inputs*55 + 5.0
 
         self.inp_activities = inputs
+    
 
     def _create_input_stream(self, total_steps):
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -183,5 +250,5 @@ class CA3Experiment(Experiment):
 
 if __name__ == "__main__":
     exp = CA3Experiment(sim=Simulator(seed=0))
-    simulation_time = 10.0
+    simulation_time = 100.0
     exp.run(steps=int(1000*simulation_time))
