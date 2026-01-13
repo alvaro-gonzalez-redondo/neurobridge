@@ -20,7 +20,8 @@ class BalancedRandomNetworkExperiment(Experiment):
         self.add_default_bridge(n_local_neurons=n_excitatory_neurons, n_steps=20)
         bridge = self.sim.local_circuit.bridge
         
-        with self.sim.autoparent("graph"):
+        #with self.sim.autoparent("graph"):
+        with self.sim.autoparent("normal"):
             # Fuente de spikes aleatorios: 50 neuronas a 5 Hz
             noise = RandomSpikeNeurons(n_neurons=n_noise_neurons, firing_rate=5.0)
 
@@ -32,50 +33,49 @@ class BalancedRandomNetworkExperiment(Experiment):
 
             # Conexiones
             n2e: StaticDense = (noise >> exc_neurons)(
-                pattern="specific",
-                weight=lambda pre, pos: torch.rand(len(pre)) * 2e-4, #TODO: Escalar pesos según el número de aferencias
+                pattern="random",
+                weight=Uniform(2e-5) / self.conn_prob,
                 delay=1,
                 synapse_class=StaticDense,
-                mask = torch.rand((noise.size, exc_neurons.size), device=self.sim.local_circuit.device) < self.conn_prob, #TODO: Esto es feo, habría que simplificar asignar valores aleatorios a mask sin tener que poner el tamaño de la matriz
+                p=self.conn_prob,
             )
 
             e2b: StaticSparse = (exc_neurons >> bridge.where_rank(self.sim.local_circuit.rank))(pattern = "one-to-one")
 
             b2e: StaticDense = (bridge >> exc_neurons)(
-                pattern="specific",
-                #weight=lambda pre, pos: torch.rand(len(pre)) * 5e-6,  #TODO: Escalar pesos según el número de aferencias
-                weight=lambda pre, pos: torch.rand(len(pre)) * 1e-6,  #TODO: Escalar pesos según el número de aferencias
+                pattern="random",
+                weight=Uniform(1e-7) / self.conn_prob,
                 delay=1,
                 #synapse_class=StaticDenseConnection,
                 synapse_class=STDPDense,
                 w_max = 3e-6,
-                mask = torch.rand((bridge.size, exc_neurons.size), device=self.sim.local_circuit.device) < self.conn_prob, #TODO: Esto es feo, habría que simplificar asignar valores aleatorios a mask sin tener que poner el tamaño de la matriz
+                p=self.conn_prob
             )
             log(f"Bridge->Exc connection shape: {(bridge.size, exc_neurons.size)}")
 
             e2i: StaticDense = (exc_neurons >> inh_neurons)(
-                pattern="specific",
-                weight=lambda pre, pos: torch.rand(len(pre)) * 2e-5, #TODO: Escalar pesos según el número de aferencias
+                pattern="random",
+                weight=Uniform(2e-6) / self.conn_prob,
                 delay=1,
                 synapse_class=StaticDense,
-                mask = torch.rand((exc_neurons.size, inh_neurons.size), device=self.sim.local_circuit.device) < self.conn_prob, #TODO: Esto es feo, habría que simplificar asignar valores aleatorios a mask sin tener que poner el tamaño de la matriz
+                p=self.conn_prob
             )
 
             i2e: StaticDense = (inh_neurons >> exc_neurons)(
-                pattern="specific",
-                weight=lambda pre, pos: torch.rand(len(pre)) * 4e-5, #TODO: Escalar pesos según el número de aferencias
+                pattern="random",
+                weight=Uniform(4e-6) / self.conn_prob,
                 delay=1,
                 synapse_class=StaticDense,
-                mask = torch.rand((inh_neurons.size, exc_neurons.size), device=self.sim.local_circuit.device) < self.conn_prob, #TODO: Esto es feo, habría que simplificar asignar valores aleatorios a mask sin tener que poner el tamaño de la matriz
+                p=self.conn_prob,
                 channel = 1,
             )
 
             i2i: StaticDense = (inh_neurons >> inh_neurons)(
-                pattern="specific",
-                weight=lambda pre, pos: torch.rand(len(pre)) * 1e-5, #TODO: Escalar pesos según el número de aferencias
+                pattern="random",
+                weight=Uniform(1e-6) / self.conn_prob,
                 delay=1,
                 synapse_class=StaticDense,
-                mask = torch.rand((inh_neurons.size, inh_neurons.size), device=self.sim.local_circuit.device) < self.conn_prob, #TODO: Esto es feo, habría que simplificar asignar valores aleatorios a mask sin tener que poner el tamaño de la matriz
+                p=self.conn_prob,
                 channel = 1,
             )
 
@@ -129,4 +129,4 @@ class BalancedRandomNetworkExperiment(Experiment):
 # --- Ejecución de la simulación ---
 if __name__ == "__main__":
     exp = BalancedRandomNetworkExperiment(sim=Simulator())
-    exp.run(steps=1000)
+    exp.run(10.0)

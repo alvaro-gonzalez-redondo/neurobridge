@@ -1,14 +1,7 @@
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
-from neurobridge import (
-    Simulator, Experiment,
-    RandomSpikeNeurons, SimpleIFNeurons,
-    STDPSparse,
-    SpikeMonitor, VariableMonitor,
-    show_or_save_plot,
-    log, log_error,
-)
+from neurobridge import *
 
 import torch
 
@@ -22,13 +15,14 @@ class RandomInputExperiment(Experiment):
 
         with self.sim.autoparent("graph"):
 
-            src_neurons = RandomSpikeNeurons(n_src_neurons, 10.0)
+            src_neurons = RandomSpikeNeurons(n_src_neurons, Uniform(1.0, 20.0))
             tgt_neurons = SimpleIFNeurons(n_neurons=n_tgt_neurons)
 
             stdp_conns = (src_neurons >> tgt_neurons)(
-                pattern="all-to-all",
+                pattern="random",
+                fanin=200,
                 synapse_class=STDPSparse,
-                weight=lambda src_idx, tgt_idx, src_sel, tgt_sel: torch.rand(src_idx.numel()) * (5/n_src_neurons),
+                weight=Uniform(0,1e-2),
             )
 
         with self.sim.autoparent("normal"):
@@ -50,7 +44,7 @@ class RandomInputExperiment(Experiment):
                         [tgt_neurons.where_idx(lambda ids: ids < 10)], ["V"]
                     )
                     self.weight_monitor = VariableMonitor(
-                        [stdp_conns.where_id(lambda ids: ids < 100)], ["weight"]
+                        [stdp_conns.where_idx(lambda ids: ids < 100)], ["weight"]
                     )
 
 
@@ -88,6 +82,5 @@ class RandomInputExperiment(Experiment):
 
 if __name__ == "__main__":
     exp = RandomInputExperiment(sim=Simulator())
-    simulation_length = 100.0
-    simulation_steps = int(simulation_length * 1000)
-    exp.run(simulation_steps)
+    simulation_length = 10.0
+    exp.run(simulation_length)

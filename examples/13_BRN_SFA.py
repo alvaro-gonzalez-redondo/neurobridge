@@ -14,22 +14,18 @@ class BalancedRandomNetworkExperiment(Experiment):
     integration_layer:bool = True
 
     # Parámetros de las conexiones
-    noi2exc_params = {'fanin':5,  'weight':Constant(5e-4), 'delay':UniformInt(0,19)}
-
-    #inp2exc_params = {'fanin':20,  'weight':Constant(0e-4), 'delay':UniformInt(0,19)}
-    inp2exc_params = {'fanin':140,  'weight':Uniform(0.0, 1e-4), 'delay':UniformInt(0,19), 'w_max':2e-4, 'A_plus':1e-6, 'A_minus':-1e-6, 'oja_decay':20e-6}
-    inp2inh_params = {'fanin':20,  'weight':Constant(2e-4), 'delay':0}
-    
-    exc2exc_params = {'fanin':80,  'weight':Uniform(0.0, 1e-4), 'delay':UniformInt(0,19), 'w_max':2e-4, 'A_plus':1e-6, 'A_minus':-1e-6, 'oja_decay':20e-6}
-    exc2inh_params = {'fanin':80,  'weight':Constant(2e-4), 'delay':0}
-    
-    sta_inh2exc_params = {'fanin':20,  'weight':Constant(1e-3), 'delay':0}
-    pla_inh2exc_params = {'fanin':10, 'weight':Constant(0.0), 'delay':0, 'w_max':1e-2, 'eta':1e-6, 'target_rate':20.0}
-    inh2inh_params = {'fanin':20,  'weight':Constant(1e-3), 'delay':0}
-    
-    exc2out_params = {'fanin':200, 'weight':Uniform(0.0, 1e-2), 'tau_stdp_fast':100e-3, 'tau_stdp_slow':200e-3, 'scale':1e-3, 'norm_every':1, 'A':-1e-6}
-    #inh2out_params = {'fanin':80, 'weight':Constant(0.0), 'delay':0, 'w_max':10.0, 'tau':1000.0, 'eta':1e-5, 'target_rate':40.0}
-    out2out_params = {'weight':Uniform(0.0, 1e-3), 'delay':0}
+    noi2exc_params = {'connection_type':StaticSparse, 'fanin':5,  'weight':Constant(5e-4), 'delay':UniformInt(0,19)}
+    #inp2exc_params = {'connection_type':StaticSparse, 'fanin':20,  'weight':Constant(0e-4), 'delay':UniformInt(0,19)}
+    inp2exc_params = {'connection_type':STDPSparse, 'fanin':140,  'weight':Uniform(0.0, 1e-4), 'delay':UniformInt(0,19), 'w_max':2e-4, 'A_plus':1e-6, 'A_minus':-1e-6, 'oja_decay':20e-6}
+    inp2inh_params = {'connection_type':StaticSparse, 'fanin':20,  'weight':Constant(2e-4), 'delay':0}
+    exc2exc_params = {'connection_type':STDPSparse, 'fanin':80,  'weight':Uniform(0.0, 1e-4), 'delay':UniformInt(0,19), 'w_max':2e-4, 'A_plus':1e-6, 'A_minus':-1e-6, 'oja_decay':20e-6}
+    exc2inh_params = {'connection_type':StaticSparse, 'fanin':80,  'weight':Constant(2e-4), 'delay':0}
+    sta_inh2exc_params = {'connection_type':StaticSparse, 'fanin':20,  'weight':Constant(1e-3), 'delay':0}
+    pla_inh2exc_params = {'connection_type':VogelsSparse, 'fanin':10, 'weight':Constant(0.0), 'delay':0, 'w_max':1e-2, 'eta':1e-6, 'target_rate':20.0}
+    inh2inh_params = {'connection_type':StaticSparse, 'fanin':20,  'weight':Constant(1e-3), 'delay':0}
+    exc2out_params = {'connection_type':STDPSFASparse, 'fanin':200, 'weight':Uniform(0.0, 1e-2), 'tau_stdp_fast':100e-3, 'tau_stdp_slow':200e-3, 'scale':1e-3, 'norm_every':1, 'A':-1e-6}
+    #inh2out_params = {'connection_type':VogelsSparse, 'fanin':80, 'weight':Constant(0.0), 'delay':0, 'w_max':10.0, 'tau':1000.0, 'eta':1e-5, 'target_rate':40.0}
+    out2out_params = {'connection_type':StaticSparse, 'weight':Uniform(0.0, 1e-3), 'delay':0}
     
     def build_network(self):
         with self.sim.autoparent("normal"):
@@ -42,23 +38,23 @@ class BalancedRandomNetworkExperiment(Experiment):
 
             # Conexiones
             if self.integration_layer:
-                self.noi2exc:StaticSparse = self.sim.connect(self.noi_neurons, self.exc_neurons, connection_type=StaticSparse, pattern="random", **self.noi2exc_params)
-                #self.inp2exc:StaticSparse = self.sim.connect(self.inp_neurons, self.exc_neurons, connection_type=StaticSparse, pattern="random", **self.inp2exc_params)
-                self.inp2exc:StaticSparse = self.sim.connect(self.inp_neurons, self.exc_neurons, connection_type=STDPSparse, pattern="random", **self.inp2exc_params)
-                self.inp2inh:StaticSparse = self.sim.connect(self.inp_neurons, self.inh_neurons, connection_type=StaticSparse, pattern="random", **self.inp2inh_params)
-                self.exc2exc:STDPSparse = self.sim.connect(self.exc_neurons, self.exc_neurons, connection_type=STDPSparse, pattern="random", autapses=False, **self.exc2exc_params)
-                self.exc2inh:StaticSparse = self.sim.connect(self.exc_neurons, self.inh_neurons, connection_type=StaticSparse, pattern="random", **self.exc2inh_params)
-                self.sta_inh2exc:VogelsSparse = self.sim.connect(self.inh_neurons, self.exc_neurons, connection_type=StaticSparse, pattern="random", channel=1, **self.sta_inh2exc_params)
-                self.pla_inh2exc:VogelsSparse = self.sim.connect(self.inh_neurons, self.exc_neurons, connection_type=VogelsSparse, pattern="random", channel=1, **self.pla_inh2exc_params)
-                self.inh2inh:StaticSparse = self.sim.connect(self.inh_neurons, self.inh_neurons, connection_type=StaticSparse, pattern="random", channel=1, autapses=False, **self.inh2inh_params)
-                self.exc2out:STDPSFASparse = self.sim.connect(self.exc_neurons, self.out_neurons,  connection_type=STDPSFASparse, pattern="random", channel=0, **self.exc2out_params)
-                #self.inh2out:VogelsSparse = self.sim.connect(self.inh_neurons, self.out_neurons,  connection_type=VogelsSparse, pattern="random", channel=1, **self.inh2out_params)
+                self.noi2exc:StaticSparse = self.sim.connect(self.noi_neurons, self.exc_neurons, pattern="random", **self.noi2exc_params)
+                #self.inp2exc:StaticSparse = self.sim.connect(self.inp_neurons, self.exc_neurons, pattern="random", **self.inp2exc_params)
+                self.inp2exc:StaticSparse = self.sim.connect(self.inp_neurons, self.exc_neurons, pattern="random", **self.inp2exc_params)
+                self.inp2inh:StaticSparse = self.sim.connect(self.inp_neurons, self.inh_neurons, pattern="random", **self.inp2inh_params)
+                self.exc2exc:STDPSparse = self.sim.connect(self.exc_neurons, self.exc_neurons, pattern="random", autapses=False, **self.exc2exc_params)
+                self.exc2inh:StaticSparse = self.sim.connect(self.exc_neurons, self.inh_neurons, pattern="random", **self.exc2inh_params)
+                self.sta_inh2exc:VogelsSparse = self.sim.connect(self.inh_neurons, self.exc_neurons, pattern="random", channel=1, **self.sta_inh2exc_params)
+                self.pla_inh2exc:VogelsSparse = self.sim.connect(self.inh_neurons, self.exc_neurons, pattern="random", channel=1, **self.pla_inh2exc_params)
+                self.inh2inh:StaticSparse = self.sim.connect(self.inh_neurons, self.inh_neurons, pattern="random", channel=1, autapses=False, **self.inh2inh_params)
+                self.exc2out:STDPSFASparse = self.sim.connect(self.exc_neurons, self.out_neurons,  pattern="random", channel=0, **self.exc2out_params)
+                #self.inh2out:VogelsSparse = self.sim.connect(self.inh_neurons, self.out_neurons,  pattern="random", channel=1, **self.inh2out_params)
             else:
                 pass
                 #self.inp2out_exc:STDPSFADense = self.sim.connect(self.inp_neurons, self.out_neurons,  connection_type=STDPSFADense, pattern="all-to-all", channel=0, fanin=200, weight=Uniform(0.0, 1e-2), tau_stdp_fast=100e-3, tau_stdp_slow=200e-3, scale=2.5e-3, norm_every=1, A=-1e-9)
                 #self.inp2out_inh:VogelsDense = self.sim.connect(self.inp_neurons, self.out_neurons,  connection_type=VogelsDense, pattern="all-to-all", channel=0,weight=Uniform(0.0, 5e-4), delay=0, w_max=10.0, eta=1e-2, target_rate=20.0)
             
-            self.out2out:VogelsDense = self.sim.connect(self.out_neurons, self.out_neurons, pattern="all-to-all", autapses=False, connection_type=StaticSparse, channel=1, **self.out2out_params)
+            self.out2out:VogelsDense = self.sim.connect(self.out_neurons, self.out_neurons, pattern="all-to-all", autapses=False, channel=1, **self.out2out_params)
 
         with self.sim.autoparent("normal"):
 

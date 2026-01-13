@@ -105,5 +105,4 @@ class RandomInputExperiment(Experiment):
 if __name__ == '__main__':
     exp = RandomInputExperiment(sim=Simulator())
     simulation_length = 10
-    simulation_steps = simulation_length * 1000
-    exp.run(simulation_steps)
+    exp.run(simulation_length)

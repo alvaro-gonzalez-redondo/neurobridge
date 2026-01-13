@@ -4,13 +4,14 @@ from neurobridge import *
 class SimpleNetwork(Experiment):
 
     def build_network(self):
-        n_neurons = 10
+        n_neurons = 5
 
-        with self.sim.autoparent("graph"):
+        #with self.sim.autoparent("graph"):
+        with self.sim.autoparent("normal"):
             self.n1 = ParrotNeurons(n_neurons)
             self.n2 = ParrotNeurons(n_neurons)
 
-            self.sim.connect(self.n1, self.n2, StaticSparse,
+            c1 = self.sim.connect(self.n1, self.n2, StaticSparse,
                 pattern="random",
                 delay=0,
                 weight=1,
@@ -18,7 +19,7 @@ class SimpleNetwork(Experiment):
                 fanin=1,#n_neurons//2,
                 fanout=1,#n_neurons//2,
             )
-            self.sim.connect(self.n2, self.n1, StaticSparse,
+            c2 = self.sim.connect(self.n2, self.n1, StaticSparse,
                 pattern="random",
                 delay=0,
                 weight=1,
