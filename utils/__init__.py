@@ -621,6 +621,10 @@ def plot_neural_trajectory_pca(
     spk_data = spk_data.numpy(force=True)
     spk_steps, spk_indices = spk_data[:, 1], spk_data[:, 0]
     spk_times = spk_steps*1e-3
+
+    if len(spk_indices)==0:
+        print("No hay spikes, nada que analizar. Abortando...")
+        return
     
     # Inferir parámetros si no se dan
     if n_neurons is None:

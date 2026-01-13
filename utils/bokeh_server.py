@@ -91,7 +91,7 @@ class CreateLinePlotHandler(BaseHandler):
         source = ColumnDataSource(data=data_dict)
         
         # WebGL activado aquí porque son líneas continuas (mejora rendimiento)
-        fig = figure(title=title, height=350, sizing_mode="stretch_width", 
+        fig = figure(title=title, height=200, sizing_mode="stretch_width", 
                      x_axis_label="Time (s)", output_backend="webgl")
 
         colors = Category10_10 * (len(series_names) // 10 + 1)
