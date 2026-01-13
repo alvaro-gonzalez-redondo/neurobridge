@@ -24,11 +24,11 @@ class Experiment:
     
     @property
     def current_step(self) -> int:
-        return self.sim.local_circuit.current_step.item()
+        return self.sim.local_circuit.current_step
     
     @property
     def current_time(self) -> float:
-        return self.sim.local_circuit.current_step.item() * 1e-3
+        return self.sim.local_circuit.current_step * 1e-3
 
     @property
     def current_rank(self) -> int:
@@ -127,4 +127,48 @@ class Experiment:
 
             log_error(traceback.format_exc())
         finally:
+            self.sim.close()
+
+
+# -------------------------------------------------------------------------
+# 1. Modificación de la clase Experiment para ejecución persistente
+# -------------------------------------------------------------------------
+class PersistentExperiment(Experiment):
+    """
+    Extensión de Experiment que permite ejecutar run() múltiples veces
+    sin cerrar el simulador, permitiendo fases (Train -> Test).
+    """
+    def run(self, time: float = None, steps: int = None, close_on_finish: bool = False) -> None:
+        if time is None:
+            if steps is None:
+                raise RuntimeError("Set time length or number of steps.")
+        else:
+            steps = int(time * 1000)
+
+        try:
+            # Solo llamamos on_start si es el primer run (step 0) o si queremos reinicializar lógica
+            if self.sim.local_circuit.current_step == 0:
+                self.on_start(total_steps=steps)
+            
+            # Barra de progreso acumulativa
+            start_step = self.sim.local_circuit.current_step
+            
+            print(f"Running for {steps} steps (System Step: {start_step} -> {start_step + steps})...")
+            
+            for t in tqdm(range(steps), desc="Simulating"):
+                self.pre_step()
+                self.sim.step()
+                self.pos_step()
+            
+            if close_on_finish:
+                self.on_finish()
+                self.sim.close()
+                print("Simulation closed.")
+            else:
+                print("Simulation paused. Ready for next phase.")
+
+        except Exception as e:
+            print(f"ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             self.sim.close()
