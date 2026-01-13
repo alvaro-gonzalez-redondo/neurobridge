@@ -10,21 +10,22 @@ from .utils import (
     VisualizerClient,
     
     StateMachine, catmull_rom_segment, SplineSegment, TrajectoryRunner, poisson_disk_sampling, RBFSpace, MultiScaleRBFEncoder, SensoryTrajectoryGenerator, ContinuousOUNoise
-
 )
 from .engine import Simulator
 from .monitors import SpikeMonitor, VariableMonitor, RingBufferSpikeMonitor, RingBufferVariableMonitor, RealtimeSpikeMonitor, RealtimeVariableMonitor
-from .sparse_connections import StaticSparse, StaticSparse, STDPSparse, VogelsSparse, STDPSFASparse
-from .dense_connections import StaticDense, StaticDense, STDPDense, VogelsDense, STDPSFADense, SFADense
+from .sparse_connections import StaticSparse, StaticSparse, STDPSparse, STDPSparseNormalized, VogelsSparse, STDPSFASparse, TripletSTDPSparse
+from .dense_connections import StaticDense, StaticDense, STDPDense, STDPDenseNormalized, VogelsDense, STDPSFADense, SFADense, TripletSTDPDense
 from .neurons import (
     NeuronGroup,
     ParrotNeurons, SimpleIFNeurons,
     RandomSpikeNeurons,
     LIFNeurons, ALIFNeurons,
     StochasticIFNeurons,
-    PhaseIFNeurons
+    PhaseIFNeurons,
+    AdExNeurons,
+    PowerLawALIFNeurons,
 )
-from .experiment import Experiment
+from .experiment import Experiment, PersistentExperiment
 
 __all__ = [
     "globals",
@@ -52,7 +53,7 @@ __all__ = [
     "StateMachine", "catmull_rom_segment", "SplineSegment", "TrajectoryRunner", "poisson_disk_sampling", "RBFSpace", "MultiScaleRBFEncoder", "SensoryTrajectoryGenerator", "ContinuousOUNoise",
 
     "Simulator",
-    "Experiment",
+    "Experiment", "PersistentExperiment",
 
     "SpikeMonitor",
     "VariableMonitor",
@@ -63,14 +64,18 @@ __all__ = [
 
     "StaticSparse",
     "STDPSparse",
+    "STDPSparseNormalized",
     "VogelsSparse",
     "STDPSFASparse",
+    "TripletSTDPSparse",
 
     "StaticDense",
     "STDPDense",
+    "STDPDenseNormalized",
     "VogelsDense",
     "STDPSFADense",
     "SFADense",
+    "TripletSTDPDense",
 
     "NeuronGroup",
     "ParrotNeurons",
@@ -80,4 +85,6 @@ __all__ = [
     "ALIFNeurons",
     "StochasticIFNeurons",
     "PhaseIFNeurons",
+    "AdExNeurons",
+    "PowerLawALIFNeurons",
 ]
