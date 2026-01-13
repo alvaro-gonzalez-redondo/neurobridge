@@ -55,7 +55,7 @@ class SpikeMonitor(Node):
         based on each group's delay_max parameter.
         """
         super()._process()
-        current_step = globals.simulator.local_circuit.current_step.item()
+        current_step = globals.simulator.local_circuit.current_step
         for i, (group, filter) in enumerate(zip(self.groups, self.filters)):
             delay_max = group.delay_max
 
@@ -79,7 +79,7 @@ class SpikeMonitor(Node):
             )  # shape: [N_spikes, 2]
             self.recorded_spikes[i].append(spikes_tensor)
 
-    def get_spike_tensor(self, group_index: int, to_cpu: bool = True) -> torch.Tensor:
+    def get_spike_tensor(self, group_index: int = 0, to_cpu: bool = True) -> torch.Tensor:
         """Get a tensor of all recorded spikes for a specific group.
 
         Parameters
@@ -139,7 +139,7 @@ class VariableMonitor(Node):
         """
         super().__init__()
         self.groups = groups
-        self.filters = [group.filter.nonzero(as_tuple=True)[0] for group in groups]
+        self.filters = [group.filter.nonzero(as_tuple=True) for group in groups]
         self.variable_names = variable_names
 
         # recorded_values[i][var] = list of tensors over time
@@ -554,7 +554,7 @@ class RealtimeSpikeMonitor(Node):
 
     def _process(self):
         super()._process()
-        current_step = globals.simulator.local_circuit.current_step.item()
+        current_step = globals.simulator.local_circuit.current_step
         dt = 1e-3 
         t_now = current_step * dt
 
@@ -635,15 +635,19 @@ class RealtimeVariableMonitor(Node):
 
     def _process(self):
         super()._process()
-        current_step = globals.simulator.local_circuit.current_step.item()
+        current_step = globals.simulator.local_circuit.current_step
         if current_step % self.interval != 0: return
 
         t_now = current_step * 1e-3 
         current_values = []
         for cfg in self.monitor_config:
-            val_tensor = getattr(cfg["group"], cfg["var"])
-            if cfg["sub"] is not None: val = val_tensor[cfg["idx"], cfg["sub"]]
-            else: val = val_tensor[cfg["idx"]]
-            current_values.append(val.item())
+            try:
+                val_tensor = getattr(cfg["group"], cfg["var"])
+                if cfg["sub"] is not None: val = val_tensor[cfg["idx"], cfg["sub"]]
+                else: val = val_tensor[cfg["idx"]]
+                current_values.append(val.item())
+            except AttributeError:
+                pass
+
 
         self.viz.push_values(self.plot_id, t_now, current_values)

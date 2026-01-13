@@ -205,9 +205,7 @@ class TestNeurons(unittest.TestCase):
         # We just need the time variable
         Simulator.engine = DummyEngine()
         Simulator.engine.local_circuit = LocalCircuit(self.device)
-        Simulator.engine.local_circuit.current_step = torch.zeros(
-            1, dtype=torch.long, device=self.device
-        )
+        Simulator.engine.local_circuit.current_step = 0
 
         # Inject spikes and see if they appear in the buffer
         spikes = torch.zeros(n_neurons, device=self.device, dtype=torch.bool)
@@ -252,9 +250,7 @@ class TestNeurons(unittest.TestCase):
         # We just need the time variable
         Simulator.engine = DummyEngine()
         Simulator.engine.local_circuit = LocalCircuit(self.device)
-        Simulator.engine.local_circuit.current_step = torch.zeros(
-            1, dtype=torch.long, device=self.device
-        )
+        Simulator.engine.local_circuit.current_step = 0
 
         # Set initial values to verify behavior
         group.V.fill_(0.0)
@@ -303,9 +299,7 @@ class TestSynapses(unittest.TestCase):
         # We just need the time variable
         Simulator.engine = DummyEngine()
         Simulator.engine.local_circuit = LocalCircuit(self.device)
-        Simulator.engine.local_circuit.current_step = torch.zeros(
-            1, dtype=torch.long, device=self.device
-        )
+        Simulator.engine.local_circuit.current_step = 0
 
         # Create source and target neuron groups
         self.source = ParrotNeurons(10, device=self.device)

@@ -137,9 +137,8 @@ class BridgeNeuronGroup(NeuronGroup):
 
         phase = globals.simulator.local_circuit.current_step % self.n_bridge_steps
         mask = subset > 0  # [n_local_neurons]
-        self._write_buffer.index_copy_(
-            1, phase, (self._write_buffer.index_select(1, phase) | mask.unsqueeze(1))
-        )
+        self._write_buffer[:, phase] |= mask
+
 
     def inject_spikes(self, spikes: torch.Tensor):
         """Inject spikes directly into the bridge neurons.
@@ -163,9 +162,8 @@ class BridgeNeuronGroup(NeuronGroup):
 
         phase = globals.simulator.local_circuit.current_step % self.n_bridge_steps
         mask = subset > 0  # [n_local_neurons]
-        self._write_buffer.index_copy_(
-            1, phase, (self._write_buffer.index_select(1, phase) | mask.unsqueeze(1))
-        )
+        self._write_buffer[:, phase] |= mask
+
 
     def _process(self):
         """Process the bridge for the current time step.
