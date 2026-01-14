@@ -6,7 +6,7 @@ class SimpleNetwork(Experiment):
     def build_network(self):
         n_neurons = 5
 
-        #with self.sim.autoparent("graph"):
+        #with self.sim.autoparent("graph"): # La optimización con CUDA Graphs aún no está implementada
         with self.sim.autoparent("normal"):
             self.n1 = ParrotNeurons(n_neurons)
             self.n2 = ParrotNeurons(n_neurons)
@@ -64,4 +64,4 @@ class SimpleNetwork(Experiment):
 
 if __name__ == "__main__":
     exp = SimpleNetwork(sim=Simulator(seed=1))
-    exp.run(steps=100)
+    exp.run(1.0)

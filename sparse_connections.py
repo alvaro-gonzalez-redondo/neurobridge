@@ -639,3 +639,187 @@ class TripletSTDPSparse(StaticSparse):
             row_sum.clamp_min_(self.eps)
             scale_out = self.norm_target_out / row_sum
             self.weight.mul_(scale_out[self.idx_pre])
+
+
+class ClopathSTDPSparse(StaticSparse):
+    r"""
+    Voltage-based STDP Rule (Clopath et al., 2010).
+
+    Mechanisms:
+    -----------
+    1. **Depression (LTD):** Event-driven.
+       Triggered when a pre-synaptic spike arrives.
+       $$ \Delta w_- = -A_{LTD}(\bar{\bar{u}}) [\bar{u}_- - \theta_-]_+ $$
+    
+    2. **Potentiation (LTP):** Continuous-time (approximated).
+       Accumulated when post-synaptic voltage is high.
+       $$ \Delta w_+ = A_{LTP} \bar{x} [u(t) - \theta_+]_+ [\bar{u}_+ - \theta_-]_+ $$
+    
+    3. **Homeostasis:**
+       Modulates LTD amplitude based on slow average voltage.
+       $$ A_{LTD}(\bar{\bar{u}}) = A_{LTD, const} \frac{(\bar{\bar{u}} - E_L)^2}{u_{ref}^2} $$
+
+    Attributes:
+    -----------
+    x_trace : torch.Tensor
+        Pre-synaptic spike trace ($\bar{x}$). Decays with $\tau_x$.
+    """
+
+    # --- Configuration ---
+    A_LTD_const: torch.Tensor
+    A_LTP_const: torch.Tensor
+    
+    theta_minus: torch.Tensor
+    theta_plus: torch.Tensor
+    
+    u_ref_sq: torch.Tensor # u_ref^2 (Homeostasis reference)
+    
+    tau_x: torch.Tensor
+    w_min: torch.Tensor
+    w_max: torch.Tensor
+    
+    # --- State ---
+    x_trace: torch.Tensor
+    _decay_x: torch.Tensor
+
+    def __init__(self, spec: ConnectionSpec):
+        super().__init__(spec)
+        
+        # Validar que las neuronas post son compatibles (tienen filtros de voltaje)
+        if not hasattr(self.pos, "u_minus"):
+            raise TypeError("ClopathSTDPSparse target population must be ClopathAdExNeurons (need voltage filters).")
+
+        device = self.pre.device
+        p = spec.params
+
+        # 1. Parámetros de Plasticidad
+        self.A_LTD_const = torch.tensor(p.get("A_LTD", 14e-5), device=device) # mV^-1
+        self.A_LTP_const = torch.tensor(p.get("A_LTP", 8e-5), device=device)  # mV^-2
+        
+        self.theta_minus = torch.tensor(p.get("theta_minus", -70.6e-3), device=device) # V
+        self.theta_plus  = torch.tensor(p.get("theta_plus", -45.3e-3), device=device)  # V
+        
+        # Homeostasis: u_ref^2 (e.g., 60 mV^2 = 60e-6 V^2 ? CUIDADO CON UNIDADES)
+        # El paper dice "60 mV^2". Si trabajamos en Voltios (SI), 1 mV = 1e-3 V.
+        # (60) * (1e-3)^2 = 60e-6 V^2.
+        # Si el usuario pasa 60 (asumiendo mV^2), convertimos.
+        raw_uref = p.get("u_ref_sq", 60.0) 
+        self.u_ref_sq = torch.tensor(raw_uref * 1e-6, device=device) # Convert to V^2
+        
+        self.w_min = torch.tensor(p.get("w_min", 0.0), device=device)
+        self.w_max = torch.tensor(p.get("w_max", 3.0), device=device) # Hard bound
+
+        # 2. Traza Presináptica
+        self.tau_x = torch.tensor(p.get("tau_x", 15e-3), device=device)
+        n_edges = len(self.idx_pre)
+        self.x_trace = torch.zeros(n_edges, dtype=torch.float32, device=device)
+        
+        # Pre-calc decay
+        # x(t+1) = x(t) * exp(-dt/tau)
+        self._decay_x = torch.exp(-self.pre.dt / self.tau_x)
+
+
+    def _update(self) -> None:
+        """
+        Execute Clopath Plasticity Rule.
+        Called every time step.
+        """
+        # 0. Decay Pre-synaptic Trace (Always happens)
+        self.x_trace.mul_(self._decay_x)
+        
+        # Obtener spikes presinápticos con retardo
+        # Nota: Usamos get_spikes_at para saber quién dispara AHORA en la terminal axónica
+        pre_spikes_mask = self.pre.get_spikes_at(self.delay, self.idx_pre)
+        
+        # Actualizar traza con nuevos spikes (+1)
+        # Convertimos bool mask a float (0. o 1.)
+        # Nota: La traza salta inmediatamente, así que para LTD usamos el valor nuevo o viejo?
+        # Paper Fig 1a: "LTD if presynaptic spike arrival occurs...". 
+        # La traza x se usa para LTP. Para LTD solo importa el evento puntual.
+        
+        # 1. --- LTD (Depression) ---
+        # Trigger: Spike presináptico
+        # Formula: -A_LTD_adpt * [u_minus - theta_minus]_+
+        
+        if pre_spikes_mask.any():
+            # Identificar sinapsis activas
+            active_indices = torch.nonzero(pre_spikes_mask, as_tuple=True)[0]
+            
+            if len(active_indices) > 0:
+                # Obtener índices de neuronas post correspondientes
+                post_indices_active = self.idx_pos[active_indices]
+                
+                # Leer estados postsinápticos (Vectores de tamaño N_active)
+                u_minus_vec = self.pos.u_minus[post_indices_active]
+                u_slow_vec  = self.pos.u_slow[post_indices_active]
+                E_leak      = self.pos.E_leak[post_indices_active] if isinstance(self.pos.E_leak, torch.Tensor) else self.pos.E_leak
+
+                # Calcular término de voltaje rectificado [u_minus - theta_minus]_+
+                # Trabajamos en Voltios.
+                volt_term = torch.relu(u_minus_vec - self.theta_minus)
+                
+                # Calcular amplitud homeostática A_LTD
+                # A_dynamic = A_const * (u_slow - E_L)^2 / u_ref_sq
+                despol = (u_slow_vec - E_leak)
+                # Safeguard: Homeostasis only if despol > 0? Paper implies squared magnitude.
+                hom_factor = (despol * despol) / self.u_ref_sq
+                A_dynamic = self.A_LTD_const * hom_factor
+                
+                # Calcular Delta W
+                delta_w_minus = -A_dynamic * volt_term
+                
+                # Aplicar cambios
+                # scatter_add_ no, acceso directo porque active_indices son únicos en el vector 'weight'? 
+                # No necesariamente únicos si hay multigraph, pero aquí 'active_indices' son índices de EDGES.
+                # 'weight' tiene forma [N_edges].
+                self.weight[active_indices] += delta_w_minus
+
+        # Actualizar traza x después de usar los spikes (o antes? El orden suele ser Trace+=Spike, luego usar Trace).
+        # Para LTP se usa la traza.
+        if pre_spikes_mask.any():
+            self.x_trace[pre_spikes_mask] += 1.0
+            # O simplemente += 1.0. El paper dice "x jumps by 1".
+            # Si x decae exp, sumar 1 es estándar.
+        
+
+        # 2. --- LTP (Potentiation) ---
+        # Trigger: Voltaje post > theta_plus
+        # Formula: + A_LTP * x_trace * [u - theta_plus]_+ * [u_plus - theta_minus]_+ * dt
+        
+        # Optimización: Filtrar neuronas post que están "disparando" (u > theta_plus)
+        # Esto reduce drásticamente el cómputo.
+        post_firing_mask = (self.pos.V > self.theta_plus)
+        
+        if post_firing_mask.any():
+            # Queremos encontrar los EDGES que conectan a estas neuronas post.
+            # self.idx_pos contiene el índice post para cada edge.
+            # Mask expandida a edges:
+            edge_mask = post_firing_mask[self.idx_pos]
+            
+            # Filtrar edges relevantes
+            # x_trace debe ser > 0 para que haya efecto
+            relevant_edges_mask = edge_mask & (self.x_trace > 1e-4)
+            
+            if relevant_edges_mask.any():
+                idxs = torch.nonzero(relevant_edges_mask, as_tuple=True)[0]
+                
+                # Datos Post
+                post_idxs = self.idx_pos[idxs]
+                u_vec = self.pos.V[post_idxs]
+                u_plus_vec = self.pos.u_plus[post_idxs]
+                
+                # Rectificaciones
+                rect_u = (u_vec - self.theta_plus) # Ya sabemos que es > 0 por la máscara
+                rect_u_avg = torch.relu(u_plus_vec - self.theta_minus)
+                
+                # Traza Pre
+                x_vec = self.x_trace[idxs]
+                
+                # Delta W
+                # Factor dt es crucial porque esto es una integral continua
+                delta_w_plus = self.A_LTP_const * x_vec * rect_u * rect_u_avg * self.pre.dt
+                
+                self.weight[idxs] += delta_w_plus
+
+        # 3. --- Hard Bounds ---
+        self.weight.clamp_(self.w_min, self.w_max)

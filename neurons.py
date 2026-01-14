@@ -1770,3 +1770,277 @@ class AdExNeurons(IFDeterministicBase):
         if self.b is not None: # check if 'b' is effectively zero (scalar) or tensor
              # In tensor case this check is implicit by values, but explicit adding is fine
              self.w[mask] += self.b[mask]
+
+
+class ClopathAdExNeurons(AdExNeurons):
+    r"""
+    AdEx Neurons with Clopath et al. (2010) extensions for Voltage-based STDP.
+
+    Extends the standard AdEx model with:
+    1. **Depolarizing After-Potential (DAP):** Modeled by an auxiliary current `z`.
+    2. **Adaptive Threshold:** The exponential threshold $V_T$ is dynamic (jumps after spike, decays).
+    3. **Voltage Filters:** Computes low-pass filtered versions of V ($\bar{u}_-$, $\bar{u}_+$, $\bar{\bar{u}}$)
+       required by the Clopath plasticity rule.
+
+    Equations:
+    ----------
+    $$ C \frac{dV}{dt} = -g_L(V - E_L) + g_L \Delta_T \exp(\frac{V - V_T^*}{\Delta_T}) + I_{syn} - w + z $$
+    
+    $$ \frac{dz}{dt} = -z / \tau_z $$ (Jumps to $I_{sp}$ on spike)
+    
+    $$ \frac{dV_T^*}{dt} = -(V_T^* - V_{T_{rest}}) / \tau_{V_T} $$ (Jumps to $V_{T_{max}}$ on spike)
+
+    Voltage Filters (for Plasticity):
+    ---------------------------------
+    $$ \tau \frac{d\bar{u}}{dt} = -\bar{u} + V(t) $$ 
+    (Implemented as discrete exponential moving averages)
+    """
+
+    # --- Clopath Specific Configuration ---
+    
+    # DAP Parameters
+    tau_z: Final[torch.Tensor]
+    I_sp: Final[torch.Tensor]
+    
+    # Dynamic Threshold Parameters
+    tau_vt: Final[torch.Tensor]
+    vt_max: Final[torch.Tensor]
+    
+    # Plasticity Filter Time Constants
+    tau_minus: Final[torch.Tensor] # For LTD
+    tau_plus: Final[torch.Tensor]  # For LTP
+    tau_slow: Final[torch.Tensor]  # For Homeostasis (approx 1s)
+
+    # --- Dynamic State ---
+    
+    z: torch.Tensor
+    """Depolarizing after-potential current [pA]."""
+
+    v_th_dyn: torch.Tensor
+    """Dynamic exponential threshold $V_T^*$ [V]."""
+
+    u_minus: torch.Tensor
+    """Filtered voltage for LTD ($\bar{u}_-$)."""
+
+    u_plus: torch.Tensor
+    """Filtered voltage for LTP ($\bar{u}_+$)."""
+
+    u_slow: torch.Tensor
+    """Slow average voltage for Homeostasis ($\bar{\bar{u}}$)."""
+    
+    # --- Internal Helpers ---
+    _clamp_mask: torch.Tensor
+    _clamp_values: torch.Tensor
+    _decay_minus: torch.Tensor
+    _decay_plus: torch.Tensor
+    _decay_slow: torch.Tensor
+    _decay_z: torch.Tensor
+    _decay_vt: torch.Tensor
+
+
+    def __init__(
+        self,
+        n_neurons: int,
+        # --- Standard AdEx Params (Defaulting to Clopath Visual Cortex) ---
+        tau_membrane: NeuronParam = 281/30 * 1e-3, # C=281pF, gL=30nS -> ~9.36 ms
+        E_leak: NeuronParam = -70.6e-3,
+        v_rheobase: NeuronParam = -50.4e-3, # VT_rest
+        v_reset: float = -70.6e-3,          # Hard reset to EL
+        threshold: float = -20.0e-3,        # V_peak (spike detection)
+        delta_T: float = 2.0e-3,
+        
+        # Adaptation w (Visual Cortex: a=4nS, b=0.805pA)
+        # Note: units in library might assume normalized gL=1. 
+        # If gL=30nS, a=4nS -> normalized a = 4/30.
+        # User library AdEx implies physical units for currents but often normalized for g.
+        # Let's assume physical units [Amperes, Volts, Seconds, Farads, Siemens]
+        a: NeuronParam = 4.0e-9,       
+        b: NeuronParam = 0.805e-12,    
+        tau_w: NeuronParam = 144e-3,
+        
+        # --- Clopath Specific Params ---
+        tau_z: NeuronParam = 40e-3,
+        I_sp: NeuronParam = 400e-12,   # 400 pA
+        
+        tau_vt: NeuronParam = 50e-3,
+        vt_max: NeuronParam = 30.4e-3, # Relative to VT_rest in paper? 
+                                       # Paper: "starts at VTmax ... and decays to VTrest". 
+                                       # Table 1a: VTmax = 30.4 mV. Likely absolute value or delta?
+                                       # Text says: "starts at VTmax after a spike". 
+                                       # Given VT_rest is -50mV, 30mV is extremely high. 
+                                       # Context: "VTmax, threshold potential AFTER a spike".
+                                       # Usually this means V_T becomes very high to prevent immediate firing.
+                                       # We will interpret it as the Target Value after spike.
+        
+        # Filters
+        tau_minus: NeuronParam = 10e-3,
+        tau_plus: NeuronParam = 7e-3,
+        tau_slow: NeuronParam = 1.0,   # 1 second for homeostasis
+        
+        dt: float = 1e-3,
+        device: Optional[Union[str, torch.device]] = None,
+        **kwargs
+    ):
+        super().__init__(
+            n_neurons=n_neurons,
+            tau_membrane=tau_membrane, # C_m in logic
+            E_leak=E_leak,
+            v_rheobase=v_rheobase,
+            v_reset=v_reset,
+            threshold=threshold,
+            delta_T=delta_T,
+            a=a, b=b, tau_w=tau_w,
+            dt=dt,
+            device=device,
+            **kwargs
+        )
+
+        # 1. Initialize Parameters
+        self.tau_z = resolve_neuron_param(tau_z, n_neurons, self.device)
+        self.I_sp = resolve_neuron_param(I_sp, n_neurons, self.device)
+        self.tau_vt = resolve_neuron_param(tau_vt, n_neurons, self.device)
+        self.vt_max = resolve_neuron_param(vt_max, n_neurons, self.device)
+        
+        self.tau_minus = resolve_neuron_param(tau_minus, n_neurons, self.device)
+        self.tau_plus = resolve_neuron_param(tau_plus, n_neurons, self.device)
+        self.tau_slow = resolve_neuron_param(tau_slow, n_neurons, self.device)
+
+        # 2. Pre-calculate Decays (Euler Exponential or Linear)
+        # Using exact exponential decay for linear filters is cleaner: x(t+1) = x(t)*decay + input*(1-decay)
+        # Or simple Euler: x(t+1) = x(t) + dt/tau * (input - x) -> x(t)*(1-dt/tau) + input*dt/tau
+        # Let's use simple Euler to match class style, or exp if preferred. 
+        # Using Exp for stability on filters.
+        self._decay_z = torch.exp(-self.dt / self.tau_z)
+        self._decay_vt = torch.exp(-self.dt / self.tau_vt)
+        
+        self._decay_minus = torch.exp(-self.dt / self.tau_minus)
+        self._decay_plus = torch.exp(-self.dt / self.tau_plus)
+        self._decay_slow = torch.exp(-self.dt / self.tau_slow)
+
+        # 3. Initialize State
+        self.z = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
+        self.v_th_dyn = self.v_rheobase.clone() # Starts at resting threshold
+        
+        self.u_minus = self.E_rest.clone()
+        self.u_plus = self.E_rest.clone()
+        self.u_slow = self.E_rest.clone()
+
+        # 4. Voltage Clamp Helpers
+        self._clamp_mask = torch.zeros(n_neurons, dtype=torch.bool, device=self.device)
+        self._clamp_values = torch.zeros(n_neurons, dtype=torch.float32, device=self.device)
+
+
+    def set_voltage_clamp(self, active: bool, values: Union[float, torch.Tensor] = 0.0):
+        """
+        Enable/Disable voltage clamp for all neurons or a subset.
+        Used for replicating Figure 1.
+        """
+        if active:
+            self._clamp_mask.fill_(True)
+            if isinstance(values, torch.Tensor):
+                self._clamp_values.copy_(values)
+            else:
+                self._clamp_values.fill_(values)
+        else:
+            self._clamp_mask.fill_(False)
+
+
+    def _integrate_step(self) -> None:
+        """
+        Main physics cycle for this time step.
+        Overrides ConductanceNeuronBase._integrate_step.
+        """
+        # 1. Update Auxiliary Dynamics (Z, V_T, Filters)
+        # These are independent of the membrane integration step but depend on previous V
+        self._update_clopath_dynamics()
+
+        # 2. Integrate Membrane (The AdEx equation)
+        self._update_channels() # Consumes synaptic currents
+        self._integrate_membrane()
+        
+        # 3. Apply Voltage Clamp (Hard override of physics)
+        if self._clamp_mask.any():
+            self.V = torch.where(self._clamp_mask, self._clamp_values, self.V)
+            # Note: Clamping V affects w and filters in the NEXT step dynamics
+
+
+    def _update_clopath_dynamics(self) -> None:
+        """
+        Updates z, v_th_dyn, and voltage filters.
+        """
+        # A. Decay z (DAP current)
+        self.z.mul_(self._decay_z)
+        
+        # B. Relax Threshold towards v_rheobase (Rest)
+        # V_th(t+1) = Rest + (V_th(t) - Rest) * decay
+        diff = self.v_th_dyn - self.v_rheobase
+        self.v_th_dyn = self.v_rheobase + diff * self._decay_vt
+
+        # C. Update Voltage Filters (Low-pass of V)
+        # u_new = u_old * decay + V_curr * (1 - decay)
+        # We use current V (from start of step)
+        
+        # u_minus (LTD filter)
+        self.u_minus.mul_(self._decay_minus).add_(self.V * (1.0 - self._decay_minus))
+        
+        # u_plus (LTP filter)
+        self.u_plus.mul_(self._decay_plus).add_(self.V * (1.0 - self._decay_plus))
+        
+        # u_slow (Homeostasis)
+        self.u_slow.mul_(self._decay_slow).add_(self.V * (1.0 - self._decay_slow))
+
+
+    def _integrate_membrane(self) -> None:
+        """
+        AdEx Integration (Modified).
+        Adds +z and uses v_th_dyn instead of v_rheobase.
+        """
+        # ... (Synaptic current calculation same as AdEx) ...
+        g_channels = torch.relu(self.channel_states[:, :, 1] - self.channel_states[:, :, 0])
+        I_syn = (g_channels * (self.E_rev_row - self.V.unsqueeze(1))).sum(dim=1)
+
+        # ... (Equation Terms) ...
+        diff_V_EL = self.V - self.E_leak
+        
+        # MODIFICATION 1: Use v_th_dyn
+        arg_exp = (self.V - self.v_th_dyn) / self.delta_T
+        arg_exp = torch.clamp(arg_exp, max=20.0)
+        I_exp = self.delta_T * torch.exp(arg_exp)
+
+        # MODIFICATION 2: Add + z
+        # I_total = -Leak + Exp + Syn - w + z
+        I_total = -diff_V_EL + I_exp + I_syn - self.w + self.z
+        
+        # Update V
+        dV = (I_total / self.Cm) * self.dt
+        self.dYdt.copy_(I_total / self.Cm)
+        self.V.add_(dV)
+
+        # Update w (Standard AdEx)
+        dw = self.dt_over_tau_w * (self.a * diff_V_EL - self.w)
+        self.w.add_(dw)
+
+
+    def _on_spikes(self, mask: torch.Tensor) -> None:
+        """
+        Handle post-spike triggers.
+        """
+        # 1. Standard AdEx adaptation (w += b)
+        super()._on_spikes(mask)
+        
+        # 2. Clopath modifications
+        if mask.any():
+            # A. Inject DAP current z += I_sp
+            # Note: I_sp is tensor or scalar.
+            if isinstance(self.I_sp, torch.Tensor):
+                self.z[mask] += self.I_sp[mask]
+            else:
+                self.z[mask] += self.I_sp
+
+            # B. Raise Threshold to VT_max
+            # Note: The paper says "starts at VTmax after a spike". 
+            # We hard set it.
+            if isinstance(self.vt_max, torch.Tensor):
+                self.v_th_dyn[mask] = self.vt_max[mask]
+            else:
+                self.v_th_dyn[mask] = self.vt_max

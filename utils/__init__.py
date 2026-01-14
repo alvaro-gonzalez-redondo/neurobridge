@@ -989,3 +989,134 @@ def analyze_network_state(
     print(f"Mean Pairwise Correlation (Target ~0.0): {mean_corr:.4f}")
 
     return cv_list, off_diag
+
+
+def plot_sparse_as_dense(
+    conn,
+    n_pre: int,
+    n_post: int,
+    *,
+    ax: Optional[plt.Axes] = None,
+    figsize=(6, 6),
+    cmap="viridis",
+    title: str | None = None,
+    show_colorbar: bool = True,
+    vmin=None,  # <--- Argumento añadido
+    vmax=None,  # <--- Argumento añadido
+):
+    """
+    Convierte la conectividad sparse a matriz densa y la dibuja.
+    NO recomendado para matrices grandes.
+    """
+    idx_pre = conn.idx_pre.detach().cpu()
+    idx_pos = conn.idx_pos.detach().cpu()
+    w = conn.weight.detach().cpu()
+
+    mat = torch.zeros((n_pre, n_post))
+    mat[idx_pre, idx_pos] = w
+
+    created_fig = False
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+        created_fig = True
+
+    # Pasamos vmin y vmax a imshow para fijar la escala de color
+    im = ax.imshow(
+        mat.T,
+        origin="upper",
+        cmap=cmap,
+        aspect="auto",
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+    ax.set_xlabel("Neuronas pre")
+    ax.set_ylabel("Neuronas post")
+
+    if title is not None:
+        ax.set_title(title)
+
+    if show_colorbar:
+        # Usamos ax.figure.colorbar para ser más robustos que plt.colorbar
+        ax.figure.colorbar(im, ax=ax, label="Peso sináptico")
+
+    if created_fig:
+        plt.tight_layout()
+        plt.show()
+
+    return im
+
+
+def plot_sparse_connectivity(
+    conn,
+    n_pre: int | None = None,
+    n_post: int | None = None,
+    *,
+    ax: Optional[plt.Axes] = None,
+    figsize=(6, 6),
+    cmap="viridis",
+    s=4,
+    show_colorbar=True,
+    title: str | None = None,
+    background_color="black",
+    vmin=None,  # <--- Nuevo argumento
+    vmax=None,  # <--- Nuevo argumento
+):
+    """
+    Visualiza conectividad sparse como scatter (pre -> post).
+    """
+    idx_pre = conn.idx_pre.detach().cpu()
+    idx_pos = conn.idx_pos.detach().cpu()
+    w = conn.weight.detach().cpu()
+
+    if n_pre is None:
+        n_pre = int(idx_pre.max()) + 1
+    if n_post is None:
+        n_post = int(idx_pos.max()) + 1
+
+    created_fig = False
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+        created_fig = True
+
+    ax.set_facecolor(background_color)
+
+    # Pasamos vmin y vmax para fijar la escala de colores externamente
+    sc = ax.scatter(
+        idx_pre,
+        idx_pos,
+        c=w,
+        s=s,
+        cmap=cmap,
+        marker="s",
+        linewidths=0,
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+    ax.set_xlim(-0.5, n_pre - 0.5)
+    ax.set_ylim(n_post - 0.5, -0.5)
+    ax.set_xlabel("Neuronas pre")
+    ax.set_ylabel("Neuronas post")
+    ax.set_aspect("equal")
+
+    if title is not None:
+        ax.set_title(title)
+
+    # Solo mostramos colorbar interno si se pide explícitamente.
+    # Cuando hacemos plots combinados, esto suele ser False.
+    if show_colorbar:
+        fig = ax.figure
+        cbar = fig.colorbar(sc, ax=ax)
+        cbar.set_label("Peso sináptico")
+
+        if background_color != "white":
+            cbar.ax.yaxis.set_tick_params(color="white")
+            plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
+            cbar.ax.yaxis.label.set_color("white")
+
+    if created_fig:
+        plt.tight_layout()
+        plt.show()
+
+    return sc

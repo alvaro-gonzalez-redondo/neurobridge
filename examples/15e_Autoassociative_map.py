@@ -39,7 +39,7 @@ class RelationalNetworkExperiment(PersistentExperiment):
 
 
     # Parámetros Conectividad
-    learning_rate = 1e-5
+    learning_rate = 1e-8
 
     base_noise = 1.0
 
@@ -50,7 +50,7 @@ class RelationalNetworkExperiment(PersistentExperiment):
     k_in2i = N_exc // 10
     k_e2e = N_exc // 10 #40
     k_e2i = 8
-    k_i2e = N_inh
+    k_i2e = N_inh // 10
     #k_i2i = 0 #20 #40
     
     one2one_exc = 1.85e-3 #Constante empírica que hace que las neuronas excitadoras disparen un spike cuando reciben un spike con este peso
@@ -74,26 +74,25 @@ class RelationalNetworkExperiment(PersistentExperiment):
     # Plasticidad Exc->Exc
     triplet_params_nmda = {
         #'eta_pre': 0.0, 'eta_post': 0.0,
-        'eta_pre': 5e-3*learning_rate, 'eta_post': 25e-3*learning_rate,
-        'tau_x_pre': 20e-3, 'tau_x_post1': 20e-3, 'tau_x_post2': 40e-3,
+        'eta_pre': 15*learning_rate, 'eta_post': 25*learning_rate,
+        'tau_x_pre': 50e-3, 'tau_x_post1': 50e-3, 'tau_x_post2': 100e-3,
         'w_max': w_e2e_nmda.mean(force_estimate=True)*10, 'mu': 0.2,
-        'norm_every': 10, 'norm_target_in': norm_target_nmda, 'norm_target_out': norm_target_nmda,
+        'norm_every': 100, 'norm_target_in': norm_target_nmda, 'norm_target_out': norm_target_nmda,
         'delay': delay_exc, #'weight': w_e2e_nmda,
     }
     triplet_params_ampa = {
         **triplet_params_nmda,
+        'tau_x_pre': 20e-3, 'tau_x_post1': 20e-3, 'tau_x_post2': 40e-3,
         'w_max': w_e2e_ampa.mean(force_estimate=True)*10, 
         'norm_target_in': norm_target_ampa, 'norm_target_out': norm_target_ampa,
     }
         
-    if False:
-        # Plasticidad Inhibitoria I->E
-        vogels_params = {
-            'eta': 5e-2*learning_rate, 'target_rate': 10.0, 'w_max': 1e-1,
-            #'weight': w_i2e,
-            'weight': 20*w_i2e,
-            'delay': delay_inh
-        }
+    # Plasticidad Inhibitoria I->E
+    vogels_params = {
+        'eta': 50*learning_rate, 'target_rate': 10.0, 'w_max': 1e-1,
+        'weight': 0.0,
+        'delay': delay_inh
+    }
 
     # Control Wake-Sleep
     steps_per_example = 250   # 250ms por input
@@ -112,6 +111,7 @@ class RelationalNetworkExperiment(PersistentExperiment):
         self.pops_inh = {}
         self.inputs = {}
         self.triplet_conns = [] # Guardamos referencias a conexiones plásticas para control rápido
+        self.vogels_conns = []
 
         # Módulos: A, B, C (Periféricos) y H (Oculto)
         module_names = ["PopA", "PopB", "PopC", "PopH"]
@@ -236,6 +236,8 @@ class RelationalNetworkExperiment(PersistentExperiment):
                     self.weight_monitor = VariableMonitor(
                         [
                             self.triplet_conns[0].where_idx(lambda i: (i<20)),
+                            self.triplet_conns[-1].where_idx(lambda i: (i<20)),
+                            self.vogels_conns[0].where_idx(lambda i: (i<20)),
                         ], 
                         ["weight"]
                     )
@@ -267,10 +269,11 @@ class RelationalNetworkExperiment(PersistentExperiment):
         else:
             self.sim.connect(pop_exc, pop_inh, connection_type=StaticSparse, pattern="random", fanin=self.k_e2i, channel=0, weight=self.w_e2i, delay=self.delay_inh)
 
-        # Inh -> Exc (Plasticidad Inhibitoria Vogels)
-        ##self.sim.connect(pop_inh, pop_exc, connection_type=VogelsSparse, pattern="random", fanin=self.k_i2e, channel=1, **self.vogels_params)
         # Inh -> Exc (Estático)
         self.sim.connect(pop_inh, pop_exc, connection_type=StaticSparse, pattern="random", fanin=self.k_i2e, channel=1, weight=self.w_i2e, delay=self.delay_inh)
+        # Inh -> Exc (Plasticidad Inhibitoria Vogels)
+        conn = self.sim.connect(pop_inh, pop_exc, connection_type=VogelsSparse, pattern="random", fanin=self.k_i2e, channel=1, **self.vogels_params)
+        self.vogels_conns.append(conn)
         
         # Inh -> Inh (Estático)
         ##self.sim.connect(pop_inh, pop_inh, connection_type=StaticSparse, pattern="random", fanin=self.k_i2i, autapses=False, channel=1, weight=self.w_i2i, delay=self.delay_default)
@@ -393,7 +396,7 @@ class RelationalNetworkExperiment(PersistentExperiment):
         self.inputs["PopA"].firing_rate = self._get_gaussian_rates(val_a) + self.base_noise
         self.inputs["PopB"].firing_rate = self._get_gaussian_rates(val_b) + self.base_noise
         self.inputs["PopC"].firing_rate = self._get_gaussian_rates(val_c) + self.base_noise
-        self.inputs["PopH"].firing_rate[:] = 15.0
+        self.inputs["PopH"].firing_rate[:] = 15.0 #self.base_noise #15.0
 
 
     def present_sleep_noise(self):
@@ -402,11 +405,11 @@ class RelationalNetworkExperiment(PersistentExperiment):
         for name in ["PopA", "PopB", "PopC", "PopH"]:
             if name == target:
                 # Ruido uniforme ~15Hz
-                noise = torch.rand(self.N_exc, device=self.current_device) * 30.0
+                noise = torch.rand(self.N_exc, device=self.current_device) * 30.0 #15.0
                 self.inputs[name].firing_rate = noise + self.base_noise
             else:
                 #self.inputs[name].firing_rate = torch.zeros(self.N_exc, device=self.current_device)
-                self.inputs[name].firing_rate[:] = 15.0 #self.base_noise
+                self.inputs[name].firing_rate[:] = 15.0 #self.base_noise #15.0
 
 
     def present_inference_input(self):
@@ -414,17 +417,19 @@ class RelationalNetworkExperiment(PersistentExperiment):
         print("Presenting Inference Input: A=0.2, B=0.3 -> C=?")
         self.inputs["PopA"].firing_rate = self._get_gaussian_rates(0.2) + self.base_noise
         self.inputs["PopB"].firing_rate = self._get_gaussian_rates(0.3) + self.base_noise
-        self.inputs["PopC"].firing_rate[:] = 15.0
-        self.inputs["PopH"].firing_rate[:] = 15.0
+        self.inputs["PopC"].firing_rate[:] = 15.0 #self.base_noise #15.0
+        self.inputs["PopH"].firing_rate[:] = 15.0 #self.base_noise #15.0
 
 
     def on_finish(self):
-        if True:
-            # Decodificación final (solo útil si acabamos en TEST)
-            #if self.phase == "TEST":
-                #self.analyze_inference()
-            self.plot_activity()
-            plt.show()
+        for i in range(10):
+            self.plot_connections(i)
+
+        # Decodificación final (solo útil si acabamos en TEST)
+        if self.phase == "TEST":
+            self.analyze_inference()
+        self.plot_activity()
+        plt.show()
     
 
     def plot_activity(self):
@@ -510,7 +515,16 @@ class RelationalNetworkExperiment(PersistentExperiment):
         if hasattr(self, "weight_monitor"):
             fig, ax0 = plt.subplots()
             w_values = self.weight_monitor.get_variable_tensor(0, "weight")
-            ax0.plot(w_values)
+            ax0.plot(w_values, c='C0')
+            w_values = self.weight_monitor.get_variable_tensor(1, "weight")
+            ax0.plot(w_values, c='C1')
+            w_values = self.weight_monitor.get_variable_tensor(2, "weight")
+            ax0.plot(w_values, c='C2')
+            
+            ax0.plot([],[], c='C0', label='A->A')
+            ax0.plot([],[], c='C1', label='H->C')
+            ax0.plot([],[], c='C2', label='H-|H')
+            plt.legend()
 
 
     def analyze_inference(self):
@@ -555,6 +569,20 @@ class RelationalNetworkExperiment(PersistentExperiment):
         plt.ylim(0, self.N_exc)
 
 
+    def plot_connections(self, index:int):
+        conn_ampa = self.triplet_conns[index*2]
+        conn_nmda = self.triplet_conns[index*2+1]
+        title = f"Connections from {conn_ampa.pre.name} to {conn_ampa.pos.name}"
+
+        fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(12,6), constrained_layout=True)
+        fig.suptitle(title, fontsize=14)
+        
+        plot_sparse_connectivity(conn_ampa, self.N_exc, self.N_exc, ax=axs[0])
+        plot_sparse_connectivity(conn_nmda, self.N_exc, self.N_exc, ax=axs[1])
+        
+        #plt.tight_layout()
+        plt.show()
+
 # -------------------------------------------------------------------------
 # 4. Ejecución
 # -------------------------------------------------------------------------
@@ -565,8 +593,9 @@ if __name__ == "__main__":
     
     # 2. Entrenamiento (Ejemplo corto: 2 ciclos Wake/Sleep)
     # 1 Ciclo = (50 ejemplos * 250ms) + 5000ms Sleep = 12500 + 5000 = 17500 steps
-    n_cycles = 2
-    steps_train = 17500 * n_cycles
+    n_cycles = 10
+    #steps_train = 17500 * n_cycles
+    steps_train = 2000
     
     print("--- STARTING TRAINING ---")
     exp.set_phase("WAKE")

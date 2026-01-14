@@ -6,6 +6,7 @@ from .utils import (
     smooth_spikes,
     mean_phase_sorting,
     plot_spikes, plot_neural_trajectory_pca, plot_neural_trajectory_umap,
+    plot_sparse_connectivity, plot_sparse_as_dense,
     RandomDistribution, Uniform, UniformInt, Normal, LogNormal, Constant,
     VisualizerClient,
     
@@ -13,7 +14,7 @@ from .utils import (
 )
 from .engine import Simulator
 from .monitors import SpikeMonitor, VariableMonitor, RingBufferSpikeMonitor, RingBufferVariableMonitor, RealtimeSpikeMonitor, RealtimeVariableMonitor
-from .sparse_connections import StaticSparse, StaticSparse, STDPSparse, STDPSparseNormalized, VogelsSparse, STDPSFASparse, TripletSTDPSparse
+from .sparse_connections import StaticSparse, StaticSparse, STDPSparse, STDPSparseNormalized, VogelsSparse, STDPSFASparse, TripletSTDPSparse, ClopathSTDPSparse
 from .dense_connections import StaticDense, StaticDense, STDPDense, STDPDenseNormalized, VogelsDense, STDPSFADense, SFADense, TripletSTDPDense
 from .neurons import (
     NeuronGroup,
@@ -24,6 +25,7 @@ from .neurons import (
     PhaseIFNeurons,
     AdExNeurons,
     PowerLawALIFNeurons,
+    ClopathAdExNeurons,
 )
 from .experiment import Experiment, PersistentExperiment
 
@@ -40,6 +42,8 @@ __all__ = [
     "mean_phase_sorting",
     "plot_neural_trajectory_pca", 
     "plot_neural_trajectory_umap",
+    "plot_sparse_connectivity",
+    "plot_sparse_as_dense",
     
     "RandomDistribution",
     "Uniform",
@@ -68,6 +72,7 @@ __all__ = [
     "VogelsSparse",
     "STDPSFASparse",
     "TripletSTDPSparse",
+    "ClopathSTDPSparse",
 
     "StaticDense",
     "STDPDense",
@@ -87,4 +92,5 @@ __all__ = [
     "PhaseIFNeurons",
     "AdExNeurons",
     "PowerLawALIFNeurons",
+    "ClopathAdExNeurons",
 ]
