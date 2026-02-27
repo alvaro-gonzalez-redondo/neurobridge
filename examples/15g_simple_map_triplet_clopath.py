@@ -36,14 +36,15 @@ class RelationalNetworkAdvanced(PersistentExperiment):
     }
 
     # === Parámetros Conectividad ===
-    learning_rate = 1e-7
+    learning_rate = 3e-6 #1e-2
+    target_firing_rate = 5.0
 
     delay_exc = UniformInt(0, delay_max-1)
     delay_inh = UniformInt(0, 4)
 
     k_in2e = 1
     k_in2i = N_exc // 10
-    k_e2e = N_exc // 10 
+    k_e2e = N_exc // 10
     k_e2i = 8
     k_i2e = N_inh // 10
     
@@ -57,34 +58,39 @@ class RelationalNetworkAdvanced(PersistentExperiment):
     w_i2e = rnd * (3*one2one_exc) / k_i2e
     
     internode_factor = 1.0 
-    
-    mu_log = np.log((1.0*one2one_exc) / k_e2e) - 0.5
-    sigma_log = 1.0 
-    w_e2e_nmda = LogNormal(mean=mu_log, std=sigma_log)    
-    w_e2e_ampa = rnd * (0.5*one2one_exc) / k_e2e
-    
-    norm_target_nmda = k_e2e * w_e2e_nmda.mean(force_estimate=True)
-    norm_target_ampa = k_e2e * w_e2e_ampa.mean(force_estimate=True)
 
+    w_e2e_nmda = rnd * (0.1*one2one_exc)/k_e2e #Constant(0.0) #rnd * (0.5*one2one_exc) / k_e2e
+    w_e2e_ampa = rnd * (0.1*one2one_exc)/k_e2e #Constant(0.0) #rnd * (0.5*one2one_exc) / k_e2e
+    
     # --- Plasticidad ---
-    triplet_params_nmda = {
-        'eta_pre': 15*learning_rate, 'eta_post': 25*learning_rate,
-        'tau_x_pre': 50e-3, 'tau_x_post1': 50e-3, 'tau_x_post2': 100e-3,
-        'w_max': w_e2e_nmda.mean(force_estimate=True)*10, 'mu': 0.2,
-        'norm_every': 100, 
-        'norm_target_in': norm_target_nmda, 'norm_target_out': norm_target_nmda,
+    triplet_params_common = {
+        'target_activity': target_firing_rate,
+        'tau_x_slow': 1.0, 
+        'w_max': 3e-2/k_e2e,
         'delay': delay_exc,
     }
-    triplet_params_ampa = {
-        **triplet_params_nmda,
-        'tau_x_pre': 20e-3, 'tau_x_post1': 20e-3, 'tau_x_post2': 40e-3,
-        'w_max': w_e2e_ampa.mean(force_estimate=True)*10, 
-        'norm_target_in': norm_target_ampa, 'norm_target_out': norm_target_ampa,
+    triplet_params_nmda = {**triplet_params_common,
+        'eta_pre':  0.5 * 1e3*learning_rate,
+        'eta_post': 2 * 1e3*learning_rate,
+
+        'tau_x_pre': 30e-3, #50e-3,
+        'tau_x_post1': 50e-3,
+        'tau_x_post2': 50e-3, #100e-3,
+    }
+    triplet_params_ampa = {**triplet_params_common,
+        'eta_pre':  0.1 * 1e3*learning_rate,
+        'eta_post': 0.2 * 1e3*learning_rate,
+
+        'tau_x_pre': 20e-3,
+        'tau_x_post1': 20e-3,
+        'tau_x_post2': 40e-3,
     }
         
     vogels_params = {
-        'eta': 50*learning_rate, 'target_rate': 10.0, 'w_max': 1e-1,
+        'eta': learning_rate, 
+        'target_rate': target_firing_rate,
         'weight': 0.0,
+        'w_max': 1e-1,
         'delay': delay_inh
     }
 
@@ -199,9 +205,9 @@ class RelationalNetworkAdvanced(PersistentExperiment):
         self.sim.connect(inp, pop_exc, connection_type=StaticSparse, pattern="one-to-one", channel=0, weight=self.w_in2e, delay=self.delay_exc)
         self.sim.connect(inp, pop_inh, connection_type=StaticSparse, pattern="random", fanin=self.k_in2i, channel=0, weight=self.w_in2i, delay=self.delay_inh)
         
-        conn_ampa = self.sim.connect(pop_exc, pop_exc, connection_type=TripletSTDPSparse, pattern="random", fanin=self.k_e2e, autapses=False, **self.triplet_params_ampa, channel=0, weight=self.w_e2e_ampa)
+        conn_ampa = self.sim.connect(pop_exc, pop_exc, connection_type=ClopathTripletSparse, pattern="random", fanin=self.k_e2e, autapses=False, **self.triplet_params_ampa, channel=0, weight=self.w_e2e_ampa)
         self.triplet_conns.append(conn_ampa)
-        conn_nmda = self.sim.connect(pop_exc, pop_exc, connection_type=TripletSTDPSparse, pattern=conn_ampa, **self.triplet_params_nmda, channel=2, weight=self.w_e2e_nmda)
+        conn_nmda = self.sim.connect(pop_exc, pop_exc, connection_type=ClopathTripletSparse, pattern=conn_ampa, **self.triplet_params_nmda, channel=2, weight=self.w_e2e_nmda)
         self.triplet_conns.append(conn_nmda)
 
         self.sim.connect(pop_exc, pop_inh, connection_type=StaticSparse, pattern="random", fanin=self.k_e2i, channel=0, weight=self.w_e2i, delay=self.delay_inh)
@@ -212,14 +218,12 @@ class RelationalNetworkAdvanced(PersistentExperiment):
     def _connect_modules(self, source_exc, target_exc, target_inh):
         factor = self.internode_factor
         
-        norm_target_ampa = factor * self.norm_target_ampa
-        params_ampa = {**self.triplet_params_ampa, 'norm_target_in': norm_target_ampa, 'norm_target_out': norm_target_ampa}
-        conn_ampa = self.sim.connect(source_exc, target_exc, connection_type=TripletSTDPSparse, pattern="random", fanin=self.k_e2e, autapses=False, **params_ampa, channel=0, weight=self.w_e2e_ampa)
+        params_ampa = self.triplet_params_ampa
+        conn_ampa = self.sim.connect(source_exc, target_exc, connection_type=ClopathTripletSparse, pattern="random", fanin=self.k_e2e, autapses=False, **params_ampa, channel=0, weight=self.w_e2e_ampa)
         self.triplet_conns.append(conn_ampa)
 
-        norm_target_nmda = factor * self.norm_target_nmda
-        params_nmda = {**self.triplet_params_nmda, 'norm_target_in': norm_target_nmda, 'norm_target_out': norm_target_nmda}
-        conn_nmda = self.sim.connect(source_exc, target_exc, connection_type=TripletSTDPSparse, pattern=conn_ampa, **params_nmda, channel=2, weight=self.w_e2e_nmda)
+        params_nmda = self.triplet_params_nmda
+        conn_nmda = self.sim.connect(source_exc, target_exc, connection_type=ClopathTripletSparse, pattern=conn_ampa, **params_nmda, channel=2, weight=self.w_e2e_nmda)
         self.triplet_conns.append(conn_nmda)
 
         self.sim.connect(source_exc, target_inh, connection_type=StaticSparse, pattern="random", fanin=self.k_e2i, channel=0, weight=self.w_e2i, delay=self.delay_inh)
@@ -233,14 +237,14 @@ class RelationalNetworkAdvanced(PersistentExperiment):
         if phase_name == "WAKE":
             for c in self.triplet_conns:
                 c.set_learning_enabled(True)
-                c.set_learning_sign(invert=False)
+                c.set_sleep_mode(False)
             self.example_counter = 0
             self.present_wake_example()
             
         elif phase_name == "SLEEP":
             for c in self.triplet_conns:
                 c.set_learning_enabled(True)
-                c.set_learning_sign(invert=True)
+                c.set_sleep_mode(True)
             self.phase_timer = self.sleep_duration_steps
             self.present_sleep_noise()
 
@@ -484,12 +488,12 @@ if __name__ == "__main__":
     print("--- STARTING TRAINING ---")
     exp.set_phase("WAKE")
     # Entrenamos 100 segundos
-    exp.run(steps=10_000, close_on_finish=False)
+    exp.run(steps=100_000, close_on_finish=False)
     
     # 2. Test Bidireccional
     print("\n--- STARTING BIDIRECTIONAL TEST ---")
     # Probamos durante 10 segundos (5s A->B, 5s B->A)
-    steps_test = 1_000
+    steps_test = 10_000
     exp.set_phase("TEST", test_steps=steps_test)
     
     exp.run(steps=steps_test, close_on_finish=True)

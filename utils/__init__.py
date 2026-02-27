@@ -25,6 +25,9 @@ from scipy.ndimage import gaussian_filter1d
 from sklearn.decomposition import PCA
 import umap
 
+from scipy.spatial.distance import pdist
+from scipy.cluster.hierarchy import linkage, leaves_list, optimal_leaf_ordering
+
 
 def is_distributed() -> bool:
     """Check if the simulation is running in distributed mode.
@@ -1059,21 +1062,74 @@ def plot_sparse_connectivity(
     show_colorbar=True,
     title: str | None = None,
     background_color="black",
-    vmin=None,  # <--- Nuevo argumento
-    vmax=None,  # <--- Nuevo argumento
+    vmin=None,
+    vmax=None,
+    order: str | None = None,
+    order_metric: str = "cosine",
+    order_normalize: str | None = "zscore",
 ):
     """
-    Visualiza conectividad sparse como scatter (pre -> post).
+    Visualiza conectividad sparse como scatter (pre -> post),
+    con ordenación opcional inducida por el contenido.
     """
-    idx_pre = conn.idx_pre.detach().cpu()
-    idx_pos = conn.idx_pos.detach().cpu()
-    w = conn.weight.detach().cpu()
+
+    idx_pre = conn.idx_pre.detach().cpu().numpy()
+    idx_pos = conn.idx_pos.detach().cpu().numpy()
+    w = conn.weight.detach().cpu().numpy()
 
     if n_pre is None:
         n_pre = int(idx_pre.max()) + 1
     if n_post is None:
         n_post = int(idx_pos.max()) + 1
 
+    # --------------------------------------------------
+    # ORDENACIÓN OPCIONAL
+    # --------------------------------------------------
+    if order == "cluster" or order is True:
+        # Construimos matriz densa temporal
+        W = np.zeros((n_post, n_pre), dtype=np.float32)
+        W[idx_pos, idx_pre] = w
+
+        # Normalización por filas (posts)
+        if order_normalize == "zscore":
+            Wn = (W - W.mean(axis=1, keepdims=True)) / (W.std(axis=1, keepdims=True) + 1e-8)
+        elif order_normalize == "l2":
+            Wn = W / (np.linalg.norm(W, axis=1, keepdims=True) + 1e-8)
+        else:
+            Wn = W
+
+        # Filas (post)
+        D_rows = pdist(Wn, metric=order_metric)
+        Z_rows = linkage(D_rows, method="average")
+        Z_rows = optimal_leaf_ordering(Z_rows, D_rows)
+        row_order = leaves_list(Z_rows)
+
+        # Columnas (pre)
+        D_cols = pdist(Wn.T, metric=order_metric)
+        Z_cols = linkage(D_cols, method="average")
+        Z_cols = optimal_leaf_ordering(Z_cols, D_cols)
+        col_order = leaves_list(Z_cols)
+
+        # Mapas índice original -> índice reordenado
+        map_post = np.empty_like(row_order)
+        map_post[row_order] = np.arange(len(row_order))
+
+        map_pre = np.empty_like(col_order)
+        map_pre[col_order] = np.arange(len(col_order))
+
+        # Reindexamos los spikes
+        idx_pos = map_post[idx_pos]
+        idx_pre = map_pre[idx_pre]
+
+        n_post = len(row_order)
+        n_pre = len(col_order)
+
+    elif order not in [None, False, True]:
+        raise ValueError(f"order='{order}' no reconocido")
+
+    # --------------------------------------------------
+    # PLOTTING
+    # --------------------------------------------------
     created_fig = False
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
@@ -1081,7 +1137,6 @@ def plot_sparse_connectivity(
 
     ax.set_facecolor(background_color)
 
-    # Pasamos vmin y vmax para fijar la escala de colores externamente
     sc = ax.scatter(
         idx_pre,
         idx_pos,
@@ -1103,8 +1158,6 @@ def plot_sparse_connectivity(
     if title is not None:
         ax.set_title(title)
 
-    # Solo mostramos colorbar interno si se pide explícitamente.
-    # Cuando hacemos plots combinados, esto suele ser False.
     if show_colorbar:
         fig = ax.figure
         cbar = fig.colorbar(sc, ax=ax)

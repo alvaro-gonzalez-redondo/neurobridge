@@ -14,7 +14,7 @@ from .utils import (
 )
 from .engine import Simulator
 from .monitors import SpikeMonitor, VariableMonitor, RingBufferSpikeMonitor, RingBufferVariableMonitor, RealtimeSpikeMonitor, RealtimeVariableMonitor
-from .sparse_connections import StaticSparse, StaticSparse, STDPSparse, STDPSparseNormalized, VogelsSparse, STDPSFASparse, TripletSTDPSparse, ClopathSTDPSparse
+from .sparse_connections import StaticSparse, StaticSparse, STDPSparse, STDPSparseNormalized, VogelsSparse, STDPSFASparse, TripletSTDPSparse, ClopathTripletSparse, ClopathSTDPSparse
 from .dense_connections import StaticDense, StaticDense, STDPDense, STDPDenseNormalized, VogelsDense, STDPSFADense, SFADense, TripletSTDPDense
 from .neurons import (
     NeuronGroup,
@@ -72,6 +72,7 @@ __all__ = [
     "VogelsSparse",
     "STDPSFASparse",
     "TripletSTDPSparse",
+    "ClopathTripletSparse",
     "ClopathSTDPSparse",
 
     "StaticDense",

@@ -641,6 +641,163 @@ class TripletSTDPSparse(StaticSparse):
             self.weight.mul_(scale_out[self.idx_pre])
 
 
+class ClopathTripletSparse(StaticSparse):
+    """
+    Implementación aproximada del modelo Clopath ("Voltage-based STDP") 
+    usando una formulación "Event-driven" (Triplet STDP modificado).
+    
+    Cambios respecto al original:
+    1. Se elimina la normalización explícita (L1).
+    2. Se introduce homeostasis mediante modulación de la amplitud de LTD
+       basada en una traza lenta de actividad postsináptica (sliding threshold BCM).
+    """
+    
+    # Tensores de estado
+    x_pre: torch.Tensor
+    x_post1: torch.Tensor     # Traza post rápida (para emparejamiento LTD)
+    x_post2: torch.Tensor     # Traza post media (para triplete LTP)
+    x_post_slow: torch.Tensor # Traza post muy lenta (para Homeostasis/BCM)
+    
+    # Parámetros (Tensores)
+    eta_pre: torch.Tensor
+    eta_post: torch.Tensor
+    
+    # Constantes
+    w_max: torch.Tensor
+    target_activity: float    # Valor de referencia para la homeostasis
+    
+    # FLAGS DE CONTROL (Tensores escalares para masking)
+    # Deben ser tensores en GPU para operar sin romper el grafo
+    flag_wake: torch.Tensor      # 1.0 si Wake, 0.0 si Sleep
+    flag_sleep: torch.Tensor     # 0.0 si Wake, 1.0 si Sleep
+    flag_enabled: torch.Tensor   # 1.0 si Learning ON, 0.0 si OFF
+
+    def __init__(self, spec: ConnectionSpec):
+        super().__init__(spec)
+        device = self.pre.device
+        params = spec.params
+
+        # Learning Rates (base)
+        self.eta_pre_base = params.get("eta_pre", 0.005)   # A_LTD base
+        self.eta_post_base = params.get("eta_post", 0.025) # A_LTP base
+        
+        self.eta_pre = torch.tensor(self.eta_pre_base, device=device)
+        self.eta_post = torch.tensor(self.eta_post_base, device=device)
+
+        # Constantes de tiempo
+        # tau_x según Clopath: ~15ms
+        # tau_u_minus (post1) según Clopath: ~10ms
+        # tau_u_plus (post2) según Clopath: ~7-10ms (Aquí usamos valores Triplet típicos)
+        # tau_homeostasis (post_slow): ~1000ms (1 segundo)
+        
+        tau_pre = params.get("tau_x_pre", 20e-3)
+        tau_post1 = params.get("tau_x_post1", 40e-3)       # Ventana de interacción LTD
+        tau_post2 = params.get("tau_x_post2", 40e-3)       # Ventana de interacción LTP (Triplet)
+        tau_post_slow = params.get("tau_x_slow", 1000e-3)  # Escala temporal de Homeostasis
+        
+        self.w_max = torch.tensor(params.get("w_max", 0.5), device=device)
+        
+        # Parámetro de Homeostasis (Target Rate / Referencia)
+        # Similar a u_ref^2 en Clopath o target_rate en BCM.
+        # Controla el punto de equilibrio de actividad.
+        self.target_activity = float(params.get("target_activity", 5.0)) # Unidades arbitrarias de traza (aprox Hz * tau)
+
+        # Inicializar trazas
+        n_edges = len(self.idx_pre)
+        self.x_pre = torch.zeros(n_edges, dtype=torch.float32, device=device)
+        self.x_post1 = torch.zeros(n_edges, dtype=torch.float32, device=device)
+        self.x_post2 = torch.zeros(n_edges, dtype=torch.float32, device=device)
+        self.x_post_slow = torch.ones(n_edges, dtype=torch.float32, device=device) * self.target_activity
+
+        # Flags de Control (Tensores para CUDA Graphs)
+        # Inicialmente Wake Mode, Learning Enabled
+        self.flag_wake = torch.tensor(1.0, device=device)
+        self.flag_sleep = torch.tensor(0.0, device=device)
+        self.flag_enabled = torch.tensor(1.0, device=device)
+
+        # Factores de decaimiento (asumiendo dt=1ms)
+        dt = 1e-3
+        self.decay_pre = np.exp(-dt / tau_pre)
+        self.decay_post1 = np.exp(-dt / tau_post1)
+        self.decay_post2 = np.exp(-dt / tau_post2)
+        self.decay_post_slow = np.exp(-dt / tau_post_slow)
+
+    def set_sleep_mode(self, enabled: bool):
+        """Cambia los flags internos (tensors) sin romper el grafo."""
+        # Usamos .fill_() in-place para mantener la misma dirección de memoria
+        if enabled:
+            self.flag_wake.fill_(0.0)
+            self.flag_sleep.fill_(1.0)
+        else:
+            self.flag_wake.fill_(1.0)
+            self.flag_sleep.fill_(0.0)
+    
+    def set_learning_enabled(self, enabled: bool):
+        val = 1.0 if enabled else 0.0
+        self.flag_enabled.fill_(val)
+
+    def _update(self) -> None:
+        # NOTA: No hay 'if' statements que dependan del estado.
+        # Todo fluye a través de operaciones tensoriales.
+
+        # 1. Decaimiento
+        self.x_pre.mul_(self.decay_pre)
+        self.x_post1.mul_(self.decay_post1)
+        self.x_post2.mul_(self.decay_post2)
+        self.x_post_slow.mul_(self.decay_post_slow)
+
+        # 2. Spikes
+        pre_spikes = self.pre.get_spikes_at(self.delay, self.idx_pre).float()
+        pos_spikes = self.pos.get_spikes_at(1, self.idx_pos).float()
+
+        # A. Factor Homeostático (Solo relevante en Wake, pero calculamos siempre)
+        # (x_slow / target)^2 + 0.15
+        hom_factor = torch.square(self.x_post_slow / (self.target_activity + 1e-6)) + 0.15
+
+        # B. Cálculo de TÉRMINOS WAKE
+        # ---------------------------
+        # LTD: -eta * hom * x_post1 * pre * w
+        wake_ltd = -self.eta_pre * hom_factor * self.x_post1 * pre_spikes * self.weight
+        
+        # LTP: +eta * x_pre * x_post2 * pos * (w_max - w)
+        dist_to_max = (self.w_max - self.weight).clamp(min=0)
+        wake_ltp = self.eta_post * self.x_pre * self.x_post2 * pos_spikes * dist_to_max
+        
+        delta_wake = wake_ltd + wake_ltp
+
+        # C. Cálculo de TÉRMINOS SLEEP (Anti-Hebbian)
+        # ---------------------------
+        # Anti-LTP: -eta * x_pre * x_post2 * pos * w
+        # Nota el signo negativo implícito al multiplicar por -eta_post luego
+        sleep_anti_ltp = -self.eta_post * self.x_pre * self.x_post2 * pos_spikes * self.weight
+        
+        # Decaimiento pasivo para limpiar ruido
+        sleep_decay = -1e-5 * self.weight
+        
+        delta_sleep = sleep_anti_ltp + sleep_decay
+
+        # D. FUSIÓN (MASKING)
+        # -------------------
+        # Delta = (Wake_Logic * flag_wake) + (Sleep_Logic * flag_sleep)
+        # Como los flags son 0.0 o 1.0 y mutuamente exclusivos, esto selecciona la lógica.
+        final_delta = (delta_wake * self.flag_wake) + (delta_sleep * self.flag_sleep)
+
+        # E. APAGADO GLOBAL (Si learning_enabled=False)
+        final_delta.mul_(self.flag_enabled)
+
+        # 4. Aplicar
+        self.weight.add_(final_delta)
+        self.weight.clamp_(0.0, self.w_max)
+
+        # 3. Actualizar trazas (movido aquí para evitar actualizaciones instantáneas)
+        self.x_pre.add_(pre_spikes)
+        self.x_post1.add_(pos_spikes)
+        self.x_post2.add_(pos_spikes)
+        self.x_post_slow.add_(pos_spikes)
+
+
+
+
 class ClopathSTDPSparse(StaticSparse):
     r"""
     Voltage-based STDP Rule (Clopath et al., 2010).
